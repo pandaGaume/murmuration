@@ -1,6 +1,7 @@
 import {
     ActivationFunctions,
     Glorot,
+    ILayerConnectionBuilder,
     IMlpGraph,
     LayerConnectionBuilder,
     LayerConnectionType,
@@ -16,8 +17,8 @@ import {
     INavigatorInputTensor,
     INavigatorGoal,
     INavigationCommand,
-    IPerceptBrain,
-    IDecisionBrain,
+    IPerceptCortex,
+    IDecisionCortex,
     IWeightLoader,
     PERCEPT_INPUT_COUNT,
     PERCEPT_OUTPUT_COUNT,
@@ -58,12 +59,9 @@ const MAX_STEER_RAD = Math.PI / 6;
  * @param fanout  Number of neurons in the destination layer.
  * @returns       A configured `LayerConnectionBuilder`.
  */
-function createConnBuilder(fanin: number, fanout: number): LayerConnectionBuilder {
+function createConnBuilder(fanin: number, fanout: number): ILayerConnectionBuilder {
     const synapseBuilder = new SynapseBuilder().withType(MlpSynapse) as SynapseBuilder;
-    return new LayerConnectionBuilder()
-        .withSynapseBuilder(synapseBuilder)
-        .withType(LayerConnectionType.FullyConnected)
-        .withWeightInitializer(new Glorot(fanin, fanout));
+    return new LayerConnectionBuilder().withSynapseBuilder(synapseBuilder).withType(LayerConnectionType.FullyConnected).withWeightInitializer(new Glorot(fanin, fanout));
 }
 
 /**
@@ -88,11 +86,7 @@ function copyGraphWeights(src: IMlpGraph, dst: IMlpGraph): void {
  * Apply deserialized weights and biases to a graph, then recompile
  * the inference runtime.
  */
-async function loadWeightsIntoGraph(
-    graph: IMlpGraph,
-    uri: string,
-    loader: IWeightLoader
-): Promise<MLPInferenceRuntime> {
+async function loadWeightsIntoGraph(graph: IMlpGraph, uri: string, loader: IWeightLoader): Promise<MLPInferenceRuntime> {
     const { weights, biases } = await loader.load(uri);
 
     const links = graph.links;
@@ -109,7 +103,7 @@ async function loadWeightsIntoGraph(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PerceptBrain — MLP-Percept implementation
+// PerceptCortex — MLP-Percept implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -140,17 +134,14 @@ async function loadWeightsIntoGraph(
  * by sqrt(2/(fan_in + fan_out)) to keep activations from saturating at
  * generation 0.
  */
-export class PerceptBrain implements IPerceptBrain {
+export class PerceptCortex implements IPerceptCortex {
     /**
      * Factory: builds a fresh 42→H→F MLP graph with Glorot-initialized weights.
      *
      * @param hiddenSize   Hidden layer neuron count. Default: 16.
      * @param outputSize   Feature output count. Default: 8.
      */
-    static createPerceptGraph(
-        hiddenSize: number = DEFAULT_CONFIG.perceptHiddenSize,
-        outputSize: number = DEFAULT_CONFIG.perceptOutputSize
-    ): IMlpGraph {
+    static createPerceptGraph(hiddenSize: number = DEFAULT_CONFIG.perceptHiddenSize, outputSize: number = DEFAULT_CONFIG.perceptOutputSize): IMlpGraph {
         const builder = new PerceptronBuilder()
             .withInputLayer(PERCEPT_INPUT_COUNT, 0, ActivationFunctions.linear)
             .withHiddenLayer(hiddenSize, 0, ActivationFunctions.tanh)
@@ -170,12 +161,8 @@ export class PerceptBrain implements IPerceptBrain {
      * @param other       If provided, copies all weights and biases from
      *                    the source brain (used for cloning/reproduction).
      */
-    public constructor(
-        hiddenSize: number = DEFAULT_CONFIG.perceptHiddenSize,
-        outputSize: number = DEFAULT_CONFIG.perceptOutputSize,
-        other?: IPerceptBrain
-    ) {
-        this._graph = PerceptBrain.createPerceptGraph(hiddenSize, outputSize);
+    public constructor(hiddenSize: number = DEFAULT_CONFIG.perceptHiddenSize, outputSize: number = DEFAULT_CONFIG.perceptOutputSize, other?: IPerceptCortex) {
+        this._graph = PerceptCortex.createPerceptGraph(hiddenSize, outputSize);
 
         if (other) {
             copyGraphWeights(other.graph, this._graph);
@@ -207,7 +194,7 @@ export class PerceptBrain implements IPerceptBrain {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DecisionBrain — MLP-Decide implementation
+// DecisionCortex — MLP-Decide implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -242,7 +229,7 @@ export class PerceptBrain implements IPerceptBrain {
  * MLP only needs to learn a mapping from a compact, high-level representation
  * to motor commands — a much simpler function than raw-sensor-to-action.
  */
-export class DecisionBrain implements IDecisionBrain {
+export class DecisionCortex implements IDecisionCortex {
     /**
      * Factory: builds a fresh 21→H→4 MLP graph with Glorot-initialized weights.
      *
@@ -267,8 +254,8 @@ export class DecisionBrain implements IDecisionBrain {
      * @param other       If provided, copies all weights and biases from
      *                    the source brain (used for cloning/reproduction).
      */
-    public constructor(hiddenSize: number = DEFAULT_CONFIG.decisionHiddenSize, other?: IDecisionBrain) {
-        this._graph = DecisionBrain.createDecisionGraph(hiddenSize);
+    public constructor(hiddenSize: number = DEFAULT_CONFIG.decisionHiddenSize, other?: IDecisionCortex) {
+        this._graph = DecisionCortex.createDecisionGraph(hiddenSize);
 
         if (other) {
             copyGraphWeights(other.graph, this._graph);
@@ -339,8 +326,8 @@ export class DecisionBrain implements IDecisionBrain {
  * - Mutation support for evolutionary training
  */
 export class NavigatorBrain implements INavigatorBrain {
-    private _percept: PerceptBrain;
-    private _decision: DecisionBrain;
+    private _percept: PerceptCortex;
+    private _decision: DecisionCortex;
     private _config: INavigatorBrainOptions;
     private _goal: INavigatorGoal | null = null;
     private _lastPerceptFeatures: number[] | null = null;
@@ -353,20 +340,16 @@ export class NavigatorBrain implements INavigatorBrain {
     public constructor(config?: Partial<INavigatorBrainOptions>, other?: INavigatorBrain) {
         this._config = { ...DEFAULT_CONFIG, ...config };
 
-        this._percept = new PerceptBrain(
-            this._config.perceptHiddenSize,
-            this._config.perceptOutputSize,
-            other?.percept
-        );
+        this._percept = new PerceptCortex(this._config.perceptHiddenSize, this._config.perceptOutputSize, other?.percept);
 
-        this._decision = new DecisionBrain(this._config.decisionHiddenSize, other?.decision);
+        this._decision = new DecisionCortex(this._config.decisionHiddenSize, other?.decision);
     }
 
-    public get percept(): IPerceptBrain {
+    public get percept(): IPerceptCortex {
         return this._percept;
     }
 
-    public get decision(): IDecisionBrain {
+    public get decision(): IDecisionCortex {
         return this._decision;
     }
 

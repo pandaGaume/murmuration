@@ -329,7 +329,7 @@ export interface INavigatorBrainOptions {
  *
  * Total params: 42×16 + 16×8 weights + 16 + 8 biases = **824**
  */
-export interface IPerceptBrain {
+export interface IPerceptCortex {
     /** The underlying MLP graph. */
     readonly graph: IMlpGraph;
 
@@ -367,7 +367,7 @@ export interface IPerceptBrain {
  *
  * Total params: 21×16 + 16×4 weights + 16 + 4 biases = **420**
  */
-export interface IDecisionBrain {
+export interface IDecisionCortex {
     /** The underlying MLP graph. */
     readonly graph: IMlpGraph;
 
@@ -450,10 +450,10 @@ export interface IDecisionBrain {
  */
 export interface INavigatorBrain {
     /** Perception sub-brain: spatial sensors → learned features. */
-    readonly percept: IPerceptBrain;
+    readonly percept: IPerceptCortex;
 
     /** Decision sub-brain: features + state + goal → motor commands. */
-    readonly decision: IDecisionBrain;
+    readonly decision: IDecisionCortex;
 
     /** Current brain configuration. */
     readonly config: INavigatorBrainOptions;
