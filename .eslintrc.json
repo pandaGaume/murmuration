@@ -6,8 +6,7 @@
         "sourceType": "module",
         "project": [
             "./packages/dev/core/tsconfig.build.json",
-            "./packages/dev/lib-a/tsconfig.build.json",
-            "./packages/dev/lib-b/tsconfig.build.json"
+            "./packages/dev/babylon/tsconfig.build.json"
         ]
     },
     "plugins": ["@typescript-eslint", "prettier"],

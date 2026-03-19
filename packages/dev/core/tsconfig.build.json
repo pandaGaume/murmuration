@@ -7,7 +7,7 @@
         "rootDir": "./src",
         "skipLibCheck": true,
         "paths": {
-            "core/*": ["dev/core/src/*"]
+            "@dev/core/*": ["dev/core/src/*"]
         }
     },
 

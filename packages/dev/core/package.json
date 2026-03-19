@@ -1,5 +1,5 @@
 {
-    "name": "@myorg/core",
+    "name": "murmuration-core",
     "version": "0.1.0",
     "main": "dist/index",
     "module": "dist/index",

@@ -16,8 +16,13 @@ const tsRule = {
     exclude: /node_modules/,
 };
 
+// Mirror tsconfig "paths" so webpack can resolve the same aliases.
+// "@dev/core/*" → "src/*" within this package.
 const resolve = {
     extensions: [".ts", ".tsx", ".js"],
+    alias: {
+        "@dev/core": path.resolve(__dirname, "src"),
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -47,7 +52,18 @@ function makeBundle(name, entry, out, mode) {
             },
             globalObject: "globalThis",
         },
-        module: { rules: [tsRule] },
+        module: {
+            rules: [
+                tsRule,
+                // @spiky-panda/core is ESM — webpack enforces fully-specified
+                // imports (e.g. './utils' must be './utils/index.js'). This rule
+                // disables that requirement for .js files in node_modules.
+                {
+                    test: /\.js$/,
+                    resolve: { fullySpecified: false },
+                },
+            ],
+        },
         resolve,
     };
 }
@@ -63,5 +79,5 @@ function makeBundle(name, entry, out, mode) {
 module.exports = (_env, argv) => {
     const mode = /** @type {"production"|"development"} */ (argv.mode === "development" ? "development" : "production");
 
-    return [makeBundle("MyOrgCore", "src/index.ts", "core.js", mode)];
+    return [makeBundle("MurmurationCore", "src/index.ts", "murmuration-core.js", mode)];
 };

@@ -1,11 +1,12 @@
 {
-  "name": "@myorg/root",
+  "name": "@murmuration/root",
   "version": "0.1.0",
   "description": "TypeScript monorepo template",
   "type": "module",
   "main": "dist/index.js",
   "private": true,
   "devDependencies": {
+    "@babylonjs/core": "^7.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "cross-env": "^7.0.3",
@@ -39,9 +40,11 @@
     "format": "npm run format:check",
     "format:check": "prettier --check \"packages/**/src/**/*.{ts,tsx,js,json,scss,css}\"",
     "format:fix": "prettier --write \"packages/**/src/**/*.{ts,tsx,js,json,scss,css}\"",
-    "bundle": "npm run bundle --workspace=@myorg/core && npm run bundle --workspace=@myorg/lib-a",
-    "bundle:dev": "npm run bundle:dev --workspace=@myorg/core && npm run bundle:dev --workspace=@myorg/lib-a",
-    "clean": "rimraf packages/dev/*/dist packages/dev/*/bundle *.tsbuildinfo"
+    "build:all": "npm run clean && tsc -b",
+    "bundle": "npm run bundle --workspace=murmuration-core && npm run bundle --workspace=murmuration-babylon",
+    "bundle:dev": "npm run bundle:dev --workspace=murmuration-core && npm run bundle:dev --workspace=murmuration-babylon",
+    "bundle:all": "npm run build:all && npm run bundle",
+    "clean": "node scripts/clean.cjs"
   },
   "engines": {
     "node": ">=20.11.0 <23.0.0",
