@@ -1,0 +1,31 @@
+{
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "parserOptions": {
+        "ecmaVersion": 2020,
+        "sourceType": "module",
+        "project": [
+            "./packages/dev/core/tsconfig.build.json",
+            "./packages/dev/lib-a/tsconfig.build.json",
+            "./packages/dev/lib-b/tsconfig.build.json"
+        ]
+    },
+    "plugins": ["@typescript-eslint", "prettier"],
+    "extends": [
+        "eslint:recommended",
+        "plugin:@typescript-eslint/recommended",
+        "prettier"
+    ],
+    "rules": {
+        "prettier/prettier": "error",
+        "@typescript-eslint/no-explicit-any": "warn",
+        "@typescript-eslint/explicit-function-return-type": "off",
+        "@typescript-eslint/explicit-module-boundary-types": "off",
+        "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+        "no-console": "warn",
+        "eqeqeq": ["error", "always"],
+        "no-var": "error",
+        "prefer-const": "error"
+    },
+    "ignorePatterns": ["dist/", "build/", "node_modules/", "*.js"]
+}
