@@ -12,7 +12,7 @@ supports any number of wheels per side — from a simple 2-wheel robot to a
 Odometry is a solved kinematic problem. The math that converts encoder
 ticks to displacement is exact for a given geometry — there is no ambiguity,
 no context-dependent decision, and no need for generalization. An MLP would
-have to *learn* trigonometry from data and would learn it worse (approximation
+have to _learn_ trigonometry from data and would learn it worse (approximation
 errors, no extrapolation guarantees) with more compute cost.
 
 ---
@@ -70,8 +70,8 @@ first-order correction that significantly reduces drift on curved paths
 at zero extra compute cost.
 
 ```
-                    Naive (straight line)
-                    ─────────────►  ← overshoots on curves
+    Naive (straight line)
+    ─────────────►  ← overshoots on curves
 
     ────────╮
             │       Midpoint (arc)
@@ -121,16 +121,16 @@ rough terrain where minor slip is normal.
 
 Wheels are assigned to a side by their `label` prefix (case-insensitive):
 
-| Label | Side |
-|-------|------|
-| `"left"` | Left |
-| `"left_front"` | Left |
-| `"left_middle"` | Left |
-| `"left_rear"` | Left |
-| `"right"` | Right |
-| `"right_front"` | Right |
+| Label            | Side  |
+| ---------------- | ----- |
+| `"left"`         | Left  |
+| `"left_front"`   | Left  |
+| `"left_middle"`  | Left  |
+| `"left_rear"`    | Left  |
+| `"right"`        | Right |
+| `"right_front"`  | Right |
 | `"right_middle"` | Right |
-| `"right_rear"` | Right |
+| `"right_rear"`   | Right |
 
 Labels that don't start with `"left"` or `"right"` are silently ignored —
 they don't contribute to differential-drive kinematics (e.g., a center
@@ -148,11 +148,11 @@ constraint is violated.
 ```typescript
 const odometry = new DifferentialOdometry(
     [
-        { label: "left",  encoder: leftEncoder },
+        { label: "left", encoder: leftEncoder },
         { label: "right", encoder: rightEncoder },
     ],
-    0.3,    // wheelBase: 30cm between wheels
-    0.3     // slipThreshold
+    0.3, // wheelBase: 30cm between wheels
+    0.3 // slipThreshold
 );
 ```
 
@@ -161,12 +161,12 @@ const odometry = new DifferentialOdometry(
 ```typescript
 const odometry = new DifferentialOdometry(
     [
-        { label: "left_front",  encoder: lfEncoder },
-        { label: "left_rear",   encoder: lrEncoder },
+        { label: "left_front", encoder: lfEncoder },
+        { label: "left_rear", encoder: lrEncoder },
         { label: "right_front", encoder: rfEncoder },
-        { label: "right_rear",  encoder: rrEncoder },
+        { label: "right_rear", encoder: rrEncoder },
     ],
-    0.45,   // wheelBase: 45cm between left/right tracks
+    0.45 // wheelBase: 45cm between left/right tracks
 );
 ```
 
@@ -175,15 +175,15 @@ const odometry = new DifferentialOdometry(
 ```typescript
 const odometry = new DifferentialOdometry(
     [
-        { label: "left_front",   encoder: lfEncoder },
-        { label: "left_middle",  encoder: lmEncoder },
-        { label: "left_rear",    encoder: lrEncoder },
-        { label: "right_front",  encoder: rfEncoder },
+        { label: "left_front", encoder: lfEncoder },
+        { label: "left_middle", encoder: lmEncoder },
+        { label: "left_rear", encoder: lrEncoder },
+        { label: "right_front", encoder: rfEncoder },
         { label: "right_middle", encoder: rmEncoder },
-        { label: "right_rear",   encoder: rrEncoder },
+        { label: "right_rear", encoder: rrEncoder },
     ],
-    0.6,    // wheelBase: 60cm between left/right tracks
-    0.3     // slipThreshold
+    0.6, // wheelBase: 60cm between left/right tracks
+    0.3 // slipThreshold
 );
 ```
 
@@ -191,25 +191,16 @@ const odometry = new DifferentialOdometry(
 
 ## Data Flow
 
-```
-left_front  ──┐
-left_middle ──┤  slip filter   ┌──────────────┐
-left_rear   ──┤──► average ───►│              │
-              │                │  Differential │──► IOdometryEstimate
-right_front ──┤  slip filter   │  Kinematics   │    (x, y, theta,
-right_middle──┤──► average ───►│              │     linearVelocity,
-right_rear  ──┘                └──────────────┘     angularVelocity,
-                                                    reliable)
-```
+![Odometry Data Flow](./images/odometry-dataflow.svg)
 
 ### Quality tagging
 
 The emitted `IOdometryEvent` carries OPC-UA style quality flags:
 
-| Condition | Quality | Value |
-|-----------|---------|-------|
-| All contributing wheels have traction | `Good` | 192 |
-| Any side has all wheels slipping | `Uncertain` | 64 |
+| Condition                             | Quality     | Value |
+| ------------------------------------- | ----------- | ----- |
+| All contributing wheels have traction | `Good`      | 192   |
+| Any side has all wheels slipping      | `Uncertain` | 64    |
 
 ---
 
@@ -219,17 +210,22 @@ The odometry estimate feeds into the navigation pipeline at two levels:
 
 1. **State fusion** — the `IOdometryEstimate` is one of four inputs
    (alongside IMU, LiDAR, and raw wheel data) that the state fusion
-   step combines into the 55-float `INavigatorInputTensor`. The
-   `reliable` flag controls how much weight the fuser gives to this
-   source vs the IMU.
+   step combines into the `INavigatorInputTensor`. The `reliable` flag
+   controls how much weight the fuser gives to this source vs the IMU.
 
-2. **MLP input tensor** — the fused pose (x, y, theta, vx, vy, omega)
-   occupies indices [0..5] of the input vector. When odometry is
-   unreliable, the fuser leans more on IMU integration, which drifts
-   faster but isn't affected by wheel slip.
+2. **MLP-Decide input** — the fused pose (x, y, theta, vx, vy, omega)
+   occupies indices [8..13] of the decision MLP's 21-float input vector,
+   alongside the 8 learned features from MLP-Percept, wheel slip ratios,
+   and the goal vector. When odometry is unreliable, the fuser leans more
+   on IMU integration, which drifts faster but isn't affected by wheel slip.
+
+3. **Wheel slip → MLP-Decide** — per-wheel slip ratios occupy indices
+   [14..17] of the decision input. The decision MLP can learn to reduce
+   throttle or increase braking when slip is high, complementing the
+   odometry's `reliable` flag.
 
 See [Navigation Architecture](./navigation-architecture.md) for the
-full two-tier brain design.
+full cascaded two-tier brain design.
 
 ---
 

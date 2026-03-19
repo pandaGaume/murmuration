@@ -4,34 +4,11 @@
 
 The navigation system follows a **two-tier brain architecture** that separates
 fast reactive control from slow strategic reasoning. This design mirrors
-biological nervous systems: a spinal reflex arc (MLP) handles millisecond
-motor responses, while a cortex (MCP/LLM) handles planning and adaptation.
+biological nervous systems: a spinal reflex arc (MLP cascade) handles
+millisecond motor responses, while a cortex (MCP/LLM) handles planning
+and adaptation.
 
-```
-Sensors (100+ Hz)
-    │
-    ├── IMU ──────┐
-    ├── LiDAR ────┤
-    ├── Wheels ───┤
-    ├── Odometry ─┤
-    │             ▼
-    │     ┌──────────────┐
-    │     │ State Fusion  │ ← EKF / complementary filter
-    │     └──────┬───────┘
-    │            ▼
-    │   ┌────────────────┐
-    │   │  MLP (local    │ ← fixed-size input tensor
-    │   │  brain)        │   deterministic, ~0.1ms
-    │   └───────┬────────┘
-    │           ▼
-    │   INavigationCommand (steer, throttle, brake)
-    │
-    ▼ (downsampled, ~1-5 Hz)
-┌────────────────────┐
-│  MCP / LLM         │ ← strategic layer
-│  (remote brain)    │   sets goals, adjusts MLP,
-└────────────────────┘   handles edge cases
-```
+![Architecture Overview](./images/architecture-overview.svg)
 
 ---
 
@@ -42,12 +19,12 @@ Sensors (100+ Hz)
 Four sensor types feed the navigation pipeline, all running at high
 frequency (100+ Hz) within the simulation tick loop:
 
-| Sensor | Interface | Output | Rate | Role |
-|--------|-----------|--------|------|------|
-| **IMU** | `IIMU6Node` | `ICartesian3` (acc + gyro) | 100–1000 Hz | Short-term ego-motion, tilt, fall detection |
-| **LiDAR** | `ILidarNode` | `ILidarScanResult` (depth grid) | 10–30 Hz | Obstacle detection, free-space mapping |
-| **Wheel Encoders** | `IWheelEncoderNode` | `IWheelEncoderData` (ticks, velocity, slip) | 100+ Hz | Ground-truth speed, traction monitoring |
-| **Odometry** | `IDifferentialOdometryNode` | `IOdometryEstimate` (x, y, theta) | 100+ Hz | Dead-reckoning pose estimate |
+| Sensor             | Interface                   | Output                                      | Rate        | Role                                        |
+| ------------------ | --------------------------- | ------------------------------------------- | ----------- | ------------------------------------------- |
+| **IMU**            | `IIMU6Node`                 | `ICartesian3` (acc + gyro)                  | 100–1000 Hz | Short-term ego-motion, tilt, fall detection |
+| **LiDAR**          | `ILidarNode`                | `ILidarScanResult` (depth grid)             | 10–30 Hz    | Obstacle detection, free-space mapping      |
+| **Wheel Encoders** | `IWheelEncoderNode`         | `IWheelEncoderData` (ticks, velocity, slip) | 100+ Hz     | Ground-truth speed, traction monitoring     |
+| **Odometry**       | `IDifferentialOdometryNode` | `IOdometryEstimate` (x, y, theta)           | 100+ Hz     | Dead-reckoning pose estimate                |
 
 Every sensor implements `ISensorNode` — it participates in the `ISimSpace`
 graph and receives `onTick(dtMs)` calls each frame. Sensors expose two
@@ -72,69 +49,105 @@ them into a single, confidence-weighted estimate:
   down-weighted (the `reliable` flag on `IOdometryEstimate` feeds into
   the confidence weighting).
 
-The fused output is a normalized input tensor (`INavigatorInputTensor`)
-ready for the MLP:
+---
 
-```
-Index   Field                Count   Range
-──────  ───────────────────  ──────  ──────────
-0–5     Pose & velocity      6      [−1, 1]
-6–11    IMU snapshot          6      [−1, 1]
-12–47   LiDAR sectors        36      [0, 1]
-48–51   Wheel slip ratios     4      [0, 1]
-52–54   Goal vector           3      [−1, 1]
-                             ──
-                        Total: 55 floats
-```
+### Cascaded MLP — The Local Brain
 
-### MLP — The Local Brain
+The `NavigatorBrain` uses a **two-stage cascaded MLP** instead of a
+single monolithic network. Each stage has a distinct responsibility:
 
-The `NavigatorBrain` is a compact multi-layer perceptron that runs
-inference at sensor rate with deterministic, sub-millisecond latency.
+![MLP Cascade Detail](./images/mlp-cascade-detail.svg)
 
-**Architecture: 55 → 32 → 4**
+**Total trainable parameters**: 824 + 420 = **1,244**
 
-```
-Input (55 neurons, linear)
-  │
-  │  55 × 32 = 1,760 weights
-  ▼
-Hidden (32 neurons, tanh)
-  │
-  │  32 × 4 = 128 weights
-  ▼
-Output (4 neurons, sigmoid)
-```
+#### Stage 1 — MLP-Percept (Perception)
 
-**Total trainable parameters**: 1,760 + 128 weights + 32 + 4 biases = **1,924**
+| Property   | Value                       | Rationale                                                                            |
+| ---------- | --------------------------- | ------------------------------------------------------------------------------------ |
+| Input      | 42 neurons, linear          | LiDAR (36) + IMU (6), pass-through                                                   |
+| Hidden     | 16 neurons, tanh            | Symmetric [−1,+1], learns obstacle features                                          |
+| Output     | 8 neurons, tanh             | Learned features in [−1,+1] (not sigmoid — intermediate values need symmetric range) |
+| Parameters | 42×16 + 16×8 + 16 + 8 = 824 |                                                                                      |
 
-| Layer | Activation | Rationale |
-|-------|-----------|-----------|
-| Input (55) | Linear | Pass-through — no information loss on pre-normalized values |
-| Hidden (32) | Tanh | Symmetric [−1, +1] matches sensor data distribution; bounded output prevents activation explosion under weight mutation |
-| Output (4) | Sigmoid | Bounded [0, 1] maps naturally to motor controls; no clamping needed |
+MLP-Percept answers the question "what's around me?" by compressing 42 raw
+spatial inputs into 8 meaningful features. These features are **not
+hand-designed** — the network learns to encode them during training or
+evolution. Conceptually, they converge toward signals like:
+
+- Front obstacle distance (near/far)
+- Front obstacle bearing (left/right of center)
+- Side clearance (left / right)
+- Closing rate (from IMU acceleration + depth changes)
+- Open corridor direction (where is the most free space)
+- Terrain roughness (from IMU vibration pattern)
+
+#### Stage 2 — MLP-Decide (Decision)
+
+| Property   | Value                       | Rationale                                     |
+| ---------- | --------------------------- | --------------------------------------------- |
+| Input      | 21 neurons, linear          | Features (8) + pose (6) + slip (4) + goal (3) |
+| Hidden     | 16 neurons, tanh            | Symmetric, learns control policy              |
+| Output     | 4 neurons, sigmoid          | Bounded [0,1] for motor commands              |
+| Parameters | 21×16 + 16×4 + 16 + 4 = 420 |                                               |
+
+MLP-Decide answers "what do I do?" by mapping the clean perception features
+plus ego-state and goal to motor commands. It receives a much cleaner signal
+than raw depth data — 8 learned features instead of 36 noisy depth sectors.
 
 **Output mapping:**
 
-| Index | Signal | Sigmoid range | Physical mapping |
-|-------|--------|--------------|-----------------|
-| 0 | Steering | 0.5 = straight | [−π/6, +π/6] radians (±30°) |
-| 1 | Throttle | 0 = stopped | [0, 1] forward force ratio |
-| 2 | Brake | 0 = coasting | [0, 1] braking force ratio |
-| 3 | Risk | 0 = safe | When ≥ threshold → escalate to MCP |
+| Index | Signal   | Sigmoid range  | Physical mapping                   |
+| ----- | -------- | -------------- | ---------------------------------- |
+| 0     | Steering | 0.5 = straight | [−π/6, +π/6] radians (±30°)        |
+| 1     | Throttle | 0 = stopped    | [0, 1] forward force ratio         |
+| 2     | Brake    | 0 = coasting   | [0, 1] braking force ratio         |
+| 3     | Risk     | 0 = safe       | When ≥ threshold → escalate to MCP |
 
-**Design choices:**
+#### Why Cascaded Instead of Monolithic?
 
-- **Why not deeper?** A single hidden layer is sufficient for the reactive
-  mappings needed (weighted sums of distances and angles). More layers
-  add latency and make mutation less effective — changes in early layers
-  get diluted through multiple non-linearities.
+The original design used a single 55→32→4 MLP (1,924 params) that handled
+both perception and decision in one network. The cascaded design improves
+on this in four ways:
+
+1. **Learned features > raw depth**: MLP-Percept compresses 36 depth sectors
+   into 8 meaningful signals. The decision network gets a much cleaner input.
+
+2. **Each MLP stays small and trainable**: 824 + 420 = 1,244 total params
+   (vs 1,924). Fewer parameters per network means faster convergence during
+   training/evolution and less overfitting.
+
+3. **Independent training/evolution**: Perception can be trained on "label
+   the obstacles" tasks, then frozen while the decision MLP evolves on
+   "reach the goal" tasks. Or swap perception models for different sensor
+   configs (e.g., 16-beam vs 64-beam LiDAR) without retraining the
+   control policy.
+
+4. **Interpretable intermediate layer**: The 8 percept outputs are loggable,
+   visualizable features. "Why did it turn left?" → inspect the percept
+   output vector, not 36 raw depth sectors.
+
+#### Design Choices
+
+- **Why tanh on MLP-Percept output?** These are intermediate values fed
+  into MLP-Decide, not final motor commands. Symmetric [−1,+1] range
+  preserves directional information ("obstacle left" = negative,
+  "obstacle right" = positive). Sigmoid would squash this into [0,1],
+  losing the sign-based directional encoding.
+
+- **Why sigmoid on MLP-Decide output?** Motor commands are inherently
+  bounded and positive. Steering maps from [0,1] to [−30°,+30°] with 0.5
+  as center. Throttle and brake are force ratios in [0,1]. Risk is a
+  probability-like score.
+
+- **Why not deeper?** Each MLP uses a single hidden layer. For the reactive
+  mappings needed (weighted sums of distances, angles, and features), one
+  hidden layer provides enough capacity. More layers would add latency and
+  make evolutionary mutation less effective — changes in early layers get
+  diluted through multiple non-linearities.
+
 - **Why Glorot initialization?** Scales initial weights by
   `sqrt(2 / (fan_in + fan_out))`, keeping activations from saturating
   at generation 0. This gives mutation a reasonable starting distribution.
-- **Why 32 hidden neurons?** Sweet spot between capacity and speed.
-  Enough to learn obstacle avoidance + goal tracking, small enough for
-  sub-millisecond inference at 100+ Hz across multiple agents.
 
 ---
 
@@ -145,16 +158,18 @@ drive motors directly — it sets intent that Tier 1 executes reactively.
 
 ### Responsibilities
 
-| Capability | Mechanism |
-|-----------|-----------|
-| **Set navigation goals** | `setGoal(INavigatorGoal)` — push a waypoint into the MLP input tensor |
-| **Swap MLP weights** | `loadWeights(uri)` via `IWeightLoader` — switch behavior profiles (road vs off-road, calm vs aggressive) |
-| **Handle escalations** | Monitor the MLP's `risk` output; when `escalate = true`, reason about alternatives (reroute, stop, request human input) |
-| **Contextual reasoning** | Use LLM capabilities to interpret complex scenarios that a 1,924-parameter MLP cannot handle (e.g., construction zones, traffic signals, ambiguous obstacles) |
+| Capability                  | Mechanism                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Set navigation goals**    | `setGoal(INavigatorGoal)` — push a waypoint into the decision MLP input tensor                                                             |
+| **Swap perception weights** | `loadPerceptWeights(uri)` — switch obstacle detection models for different environments (indoor vs outdoor, dense vs sparse)               |
+| **Swap decision weights**   | `loadDecisionWeights(uri)` — switch control policies (road vs off-road, calm vs aggressive)                                                |
+| **Handle escalations**      | Monitor the MLP-Decide `risk` output; when `escalate = true`, reason about alternatives                                                    |
+| **Inspect perception**      | Read `lastPerceptFeatures` to understand what the perception MLP "sees" — enables LLM-level reasoning about the spatial situation          |
+| **Contextual reasoning**    | Use LLM capabilities for scenarios that a 1,244-parameter cascade cannot handle (construction zones, traffic signals, ambiguous obstacles) |
 
 ### Weight Loading
 
-The `IWeightLoader` interface decouples weight storage from the brain:
+The `IWeightLoader` interface decouples weight storage from both brains:
 
 ```typescript
 interface IWeightLoader {
@@ -163,7 +178,10 @@ interface IWeightLoader {
 ```
 
 Implementations can load from any transport (file system, HTTP, IndexedDB)
-and any format (JSON, binary, protobuf). When weights are loaded:
+and any format (JSON, binary, protobuf). The weight loader is shared by
+both MLPs but each maintains independent weight sets.
+
+When weights are loaded into either sub-brain:
 
 1. Synapse weights and neuron biases are applied to the `IMlpGraph`.
 2. The `MLPInferenceRuntime` is recompiled to reflect the new parameters.
@@ -172,7 +190,7 @@ and any format (JSON, binary, protobuf). When weights are loaded:
 ### Escalation Flow
 
 ```
-MLP output: risk = 0.92 (≥ threshold 0.8)
+MLP-Decide output: risk = 0.92 (≥ threshold 0.8)
     │
     ▼
 INavigationCommand.escalate = true
@@ -180,12 +198,13 @@ INavigationCommand.escalate = true
     ▼
 MCP layer receives notification (via sensor event at 1–5 Hz)
     │
-    ├── Query obstacle map: "what is ahead?"
+    ├── Read lastPerceptFeatures: [0.9, -0.3, 0.1, ...] → "large obstacle front-right"
     ├── Reason about alternatives
     └── Decision:
-        ├── setGoal(newWaypoint)     → reroute around obstacle
-        ├── loadWeights("off-road")  → switch to terrain-adapted behavior
-        └── emergencyStop()          → halt and request human input
+        ├── setGoal(newWaypoint)              → reroute around obstacle
+        ├── loadPerceptWeights("indoor-v2")   → switch to indoor obstacle model
+        ├── loadDecisionWeights("off-road")   → switch to terrain-adapted policy
+        └── emergencyStop()                   → halt and request human input
 ```
 
 ---
@@ -211,13 +230,17 @@ packages/dev/core/src/
 │       ├── sensors.imu.interfaces.ts       IAccelerometerNode, IGyroNode, IIMU6Node
 │       ├── sensors.lidar.interfaces.ts     ILidarScanOptions, ILidarScanResult, ILidarNode
 │       ├── sensors.wheel-encoder.interfaces.ts  IWheelEncoderNode, IDifferentialOdometryNode
+│       ├── sensors.differential-odometry.ts     DifferentialOdometry (N-wheel impl)
 │       └── index.ts
 │
-├── navigation/                 MLP brain & command output
-│   ├── navigation.interfaces.ts  INavigatorInputTensor, INavigatorBrain,
+├── navigation/                 Cascaded MLP brain & command output
+│   ├── navigation.interfaces.ts  IPerceptBrain, IDecisionBrain,
+│   │                             INavigatorBrain, INavigatorInputTensor,
 │   │                             INavigationCommand, IWeightLoader,
 │   │                             INavigatorBrainOptions, INavigatorNode
-│   ├── navigation.brain.ts       NavigatorBrain (55→32→4 MLP implementation)
+│   ├── navigation.brain.ts       PerceptBrain (42→16→8),
+│   │                             DecisionBrain (21→16→4),
+│   │                             NavigatorBrain (cascaded)
 │   └── index.ts
 │
 └── index.ts                    Re-exports all modules
@@ -236,11 +259,11 @@ packages/dev/core/src/
     │                                     │
     ├── ICartesian3 ────────────────► IAccelerometerNode, IGyroNode
     │                                     │
-    ├── IMlpGraph, MLPInferenceRuntime ──► INavigatorBrain
+    ├── IMlpGraph, MLPInferenceRuntime ──► IPerceptBrain, IDecisionBrain
     │                                     │
-    └── PerceptronBuilder, Glorot... ──► NavigatorBrain (impl)
+    └── PerceptronBuilder, Glorot... ──► PerceptBrain, DecisionBrain (impls)
 
-core/telemetry
+@dev/core/telemetry
     │
     └── IRecord ────────────────────► ISensorEventEmitter<TEvent>
                                       │
@@ -251,7 +274,7 @@ core/telemetry
                                       ├── IOdometryEvent
                                       └── INavigationCommandEvent
 
-core/perception
+@dev/core/perception
     │
     ├── ISensorNode ────────────────► IIMU6Node
     ├── ISensorNode ────────────────► ILidarNode
@@ -259,9 +282,11 @@ core/perception
     ├── ISensorNode ────────────────► IDifferentialOdometryNode
     └── ISensorNode ────────────────► INavigatorNode
 
-core/navigation
+@dev/core/navigation
     │
-    ├── INavigatorBrain ◄──────────── NavigatorBrain
+    ├── IPerceptBrain ◄──────────── PerceptBrain (42→16→8)
+    ├── IDecisionBrain ◄─────────── DecisionBrain (21→16→4)
+    ├── INavigatorBrain ◄────────── NavigatorBrain (cascade)
     ├── IWeightLoader ◄──────────── (user-provided impl)
     └── INavigatorNode ─── consumes ──► IMU + LiDAR + Wheels + Odometry
                        └── produces ──► INavigationCommand
@@ -272,13 +297,31 @@ core/navigation
 ## Data Flow Summary
 
 1. **Sensors** produce raw readings every tick (`onTick(dtMs)`).
-2. **State fusion** normalizes and combines them into a 55-float tensor.
-3. **MLP** runs feed-forward inference in ~0.1ms → 4-float output.
-4. **`INavigationCommand`** is emitted as a sensor event for actuators.
-5. **MCP layer** (1–5 Hz) monitors risk, sets goals, swaps weights.
+2. **State fusion** normalizes and combines them into structured tensors.
+3. **MLP-Percept** compresses LiDAR (36) + IMU (6) → 8 learned features (~0.05ms).
+4. **MLP-Decide** maps features (8) + pose (6) + slip (4) + goal (3) → 4 motor outputs (~0.05ms).
+5. **`INavigationCommand`** is emitted as a sensor event for actuators.
+6. **MCP layer** (1–5 Hz) monitors risk, inspects percept features, sets goals, swaps weights.
 
-The critical invariant: **Tier 1 never waits for Tier 2.** The MLP always
-produces a valid command from the latest sensor state. The MCP layer
-influences behavior asynchronously by adjusting the goal vector or
-swapping the weight set — both take effect on the next tick without
-blocking the control loop.
+The critical invariant: **Tier 1 never waits for Tier 2.** The MLP cascade
+always produces a valid command from the latest sensor state. The MCP layer
+influences behavior asynchronously by:
+
+- Adjusting the goal vector (takes effect next tick)
+- Swapping percept weights (changes what features the network "sees")
+- Swapping decision weights (changes the control policy)
+
+None of these operations block the control loop.
+
+---
+
+## Parameter Budget Comparison
+
+| Architecture                       | Weights | Biases | Total | Inference |
+| ---------------------------------- | ------- | ------ | ----- | --------- |
+| **Monolithic** 55→32→4             | 1,888   | 36     | 1,924 | ~0.1ms    |
+| **Cascaded** [42→16→8] + [21→16→4] | 1,200   | 44     | 1,244 | ~0.1ms    |
+
+The cascaded design uses **35% fewer parameters** while providing better
+separation of concerns, independent trainability, and interpretable
+intermediate features.

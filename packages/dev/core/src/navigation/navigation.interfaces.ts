@@ -3,33 +3,72 @@ import { IRecord } from "@dev/core/telemetry";
 import { ISensorEventEmitter, ISensorNode, ISensorReadable } from "@dev/core/perception";
 import { IDifferentialOdometryNode } from "@dev/core/perception";
 
-// ---------------------------------------------------------------------------
-// Input tensor
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants — Perception MLP (MLP-Percept)
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Number of angular sectors the lidar depth grid is downsampled into
- * for the MLP input. Each sector holds the minimum depth value within
- * its angular range, giving a compact 1-D "distance ring" around the agent.
+ * for the perception MLP input. Each sector holds the minimum depth value
+ * within its angular range, giving a compact 1-D "distance ring" around
+ * the agent.
  */
 export const NAVIGATOR_LIDAR_SECTORS = 36;
 
 /**
- * Total MLP input size.
+ * Perception MLP input size.
+ *
+ * The perception brain receives raw spatial sensors only — it answers
+ * "what's around me?" without knowing about pose, goal, or wheels.
  *
  * Layout (all values normalized to ~[−1,1] or [0,1]):
- *   [0..5]   pose & velocity   — x, y, theta, vx, vy, omega        (6)
- *   [6..11]  IMU snapshot       — ax, ay, az, gx, gy, gz            (6)
- *   [12..47] lidar sectors      — min depth per 10° sector           (36)
- *   [48..51] wheel slip         — slip ratio per wheel (up to 4)     (4)
- *   [52..54] goal vector        — relative dx, dy, dtheta to target  (3)
+ *   [0..35]  lidar sectors  — min depth per 10° sector            (36)
+ *   [36..41] IMU snapshot   — ax, ay, az, gx, gy, gz              (6)
  *
- *   Total: 55
+ *   Total: 42
  */
-export const NAVIGATOR_INPUT_COUNT = 55;
+export const PERCEPT_INPUT_COUNT = 42;
 
 /**
- * MLP output size.
+ * Number of learned features the perception MLP outputs.
+ *
+ * These features are not hand-designed — the MLP learns to compress
+ * 42 raw spatial inputs into 8 meaningful signals. Conceptually they
+ * converge toward:
+ *   - Front obstacle distance (near/far)
+ *   - Front obstacle bearing (left/right of center)
+ *   - Side clearance (left / right)
+ *   - Closing rate (from IMU + depth delta)
+ *   - Open corridor direction
+ *   - Terrain roughness signal (from IMU vibration)
+ *
+ * 8 features is a sweet spot: enough to encode the spatial situation,
+ * compact enough to be a clean input for the decision MLP.
+ */
+export const PERCEPT_OUTPUT_COUNT = 8;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants — Decision MLP (MLP-Decide)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Decision MLP input size.
+ *
+ * The decision brain receives the perception features plus ego-state
+ * and goal — it answers "what do I do?"
+ *
+ * Layout (all values normalized to ~[−1,1] or [0,1]):
+ *   [0..7]   percept features — learned from MLP-Percept              (8)
+ *   [8..13]  pose & velocity  — x, y, theta, vx, vy, omega           (6)
+ *   [14..17] wheel slip       — slip ratio per wheel (up to 4)        (4)
+ *   [18..20] goal vector      — relative dx, dy, dtheta to target     (3)
+ *
+ *   Total: 21
+ */
+export const DECIDE_INPUT_COUNT = 21;
+
+/**
+ * Decision MLP output size.
  *
  * Layout (all values in [0,1] via sigmoid):
  *   [0] steering  — 0.5 = straight, 0/1 = max left/right
@@ -39,11 +78,70 @@ export const NAVIGATOR_INPUT_COUNT = 55;
  *
  *   Total: 4
  */
-export const NAVIGATOR_OUTPUT_COUNT = 4;
+export const DECIDE_OUTPUT_COUNT = 4;
 
 /**
- * Structured view of the MLP input tensor.
- * Implementations flatten this into a float[] for inference.
+ * Legacy constant — total flattened input size for the full cascade.
+ * Kept for backward compatibility. Equals PERCEPT_INPUT_COUNT + 6 (pose) + 4 (slip) + 3 (goal).
+ */
+export const NAVIGATOR_INPUT_COUNT = 55;
+
+/** Legacy constant — final output size. Same as DECIDE_OUTPUT_COUNT. */
+export const NAVIGATOR_OUTPUT_COUNT = DECIDE_OUTPUT_COUNT;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Input / output tensor interfaces
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Structured input for the perception MLP.
+ * Contains only spatial/inertial data — no ego-state or goal.
+ */
+export interface IPerceptInputTensor {
+    /** Downsampled lidar depth per angular sector (NAVIGATOR_LIDAR_SECTORS values). */
+    lidarSectors: number[];
+
+    /** Raw IMU snapshot: ax, ay, az, gx, gy, gz. */
+    imu: [number, number, number, number, number, number];
+}
+
+/**
+ * Output of the perception MLP — learned environment features.
+ */
+export interface IPerceptOutputTensor {
+    /**
+     * Learned obstacle/environment features.
+     * Length = PERCEPT_OUTPUT_COUNT (8).
+     *
+     * Not hand-designed — the MLP learns to encode the spatial situation
+     * into these features during training/evolution. They become the
+     * perception input to the decision MLP.
+     */
+    features: number[];
+}
+
+/**
+ * Structured input for the decision MLP.
+ * Combines perception features with ego-state and goal.
+ */
+export interface IDecideInputTensor {
+    /** Learned environment features from MLP-Percept (8 values). */
+    perceptFeatures: number[];
+
+    /** Fused pose & velocity: x, y, theta, vx, vy, omega. */
+    pose: [number, number, number, number, number, number];
+
+    /** Per-wheel slip ratios (0 = grip, 1 = full slip). Up to 4 wheels. */
+    wheelSlip: number[];
+
+    /** Relative vector to current goal: dx, dy, dtheta. */
+    goal: [number, number, number];
+}
+
+/**
+ * Full structured input tensor for the cascaded navigator.
+ * The `INavigatorNode` builds this from raw sensor reads, then the
+ * `INavigatorBrain` splits it into percept + decide stages.
  */
 export interface INavigatorInputTensor {
     /** Fused pose & velocity: x, y, theta, vx, vy, omega. */
@@ -63,7 +161,7 @@ export interface INavigatorInputTensor {
 }
 
 /**
- * Structured view of the MLP output tensor.
+ * Structured view of the final MLP output tensor (from MLP-Decide).
  */
 export interface INavigatorOutputTensor {
     /** Steering: 0.5 = straight, 0 = max left, 1 = max right. */
@@ -83,12 +181,12 @@ export interface INavigatorOutputTensor {
     risk: number;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 // Navigation command (downstream-consumable action)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Motor-level command derived from the MLP output,
+ * Motor-level command derived from the MLP cascade output,
  * ready for consumption by actuators or a motor controller.
  */
 export interface INavigationCommand {
@@ -108,9 +206,9 @@ export interface INavigationCommand {
     escalate: boolean;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 // Goal
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Target waypoint the navigator should steer toward.
@@ -127,9 +225,9 @@ export interface INavigatorGoal {
     theta: number;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 // Weight loading
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Strategy for deserializing MLP weights from a URI.
@@ -145,26 +243,48 @@ export interface IWeightLoader {
     load(uri: string): Promise<{ weights: number[]; biases: number[] }>;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 // MLP options
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Options for the navigator MLP.
- * Mirrors the CreatureBrain pattern: architecture is fixed at build time,
- * but weights can be swapped at runtime via the weight loader.
+ * Options for the cascaded navigator MLP.
+ *
+ * The cascade consists of two independent MLPs:
+ *
+ * 1. **MLP-Percept** (42 → perceptHiddenSize → perceptOutputSize):
+ *    Compresses raw spatial data (lidar + IMU) into learned features.
+ *
+ * 2. **MLP-Decide** (21 → decisionHiddenSize → 4):
+ *    Maps perception features + ego-state + goal to motor commands.
+ *
+ * Both share the same `IWeightLoader` for serialization but maintain
+ * independent weight sets. Weights can be swapped independently via
+ * `loadPerceptWeights()` and `loadDecisionWeights()`.
  */
 export interface INavigatorBrainOptions {
     /**
-     * Hidden layer neuron count.
-     * Default: 32 (sweet spot for ~55 inputs and 4 outputs).
+     * Perception MLP hidden layer neuron count.
+     * Default: 16 — enough to extract obstacle features from 42 inputs.
      */
-    hiddenSize: number;
+    perceptHiddenSize: number;
+
+    /**
+     * Number of learned features the perception MLP outputs.
+     * Default: 8 (PERCEPT_OUTPUT_COUNT).
+     */
+    perceptOutputSize: number;
+
+    /**
+     * Decision MLP hidden layer neuron count.
+     * Default: 16 — enough to map 21 inputs (features + state + goal)
+     * to 4 motor outputs.
+     */
+    decisionHiddenSize: number;
 
     /**
      * Inference rate in Hz.
-     * The brain runs at this frequency, independent of the simulation tick rate.
-     * Sensor data is sampled/interpolated to match. Default: 100.
+     * Both MLPs run in cascade at this frequency. Default: 100.
      */
     inferenceRateHz: number;
 
@@ -174,77 +294,196 @@ export interface INavigatorBrainOptions {
      */
     riskEscalationThreshold: number;
 
-    /** URI to a serialized weight set (JSON or binary). Optional. */
-    weightsUri?: string;
+    /** URI to perception MLP weights. Optional. */
+    perceptWeightsUri?: string;
+
+    /** URI to decision MLP weights. Optional. */
+    decisionWeightsUri?: string;
 
     /**
      * Strategy for loading weights from a URI.
-     * If not provided, `loadWeights()` will throw until one is set.
+     * Shared by both MLPs. If not provided, `loadWeights()` will throw.
      */
     weightLoader?: IWeightLoader;
 }
 
-// ---------------------------------------------------------------------------
-// Navigator brain interface
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
+// Sub-brain interfaces
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * The local MLP brain for reactive navigation.
+ * The perception sub-brain: MLP-Percept.
  *
- * **Architecture: 55 → 32 → 4 (MLP)**
+ * **Architecture: 42 → 16 → 8**
  *
- * - **Input layer** (55 neurons, linear activation):
- *   Receives the flattened `INavigatorInputTensor` — already normalized.
- *   Linear pass-through preserves sensor fidelity.
+ * - **Input** (42 neurons, linear): LiDAR sectors (36) + IMU (6).
+ *   Raw spatial data passed through unchanged.
  *
- * - **Hidden layer** (32 neurons, tanh activation):
- *   Tanh matches the [−1,+1] sensor distribution and provides symmetric
- *   response to directional inputs (obstacle left vs right).
- *   32 neurons give enough capacity for obstacle avoidance + path tracking
- *   while staying under 2k parameters for sub-ms inference.
+ * - **Hidden** (16 neurons, tanh): Learns to extract obstacle/environment
+ *   features from the raw depth + inertial signal. Tanh provides symmetric
+ *   response ("obstacle left" vs "obstacle right").
  *
- * - **Output layer** (4 neurons, sigmoid activation):
- *   Sigmoid ∈ [0,1] maps to steering, throttle, brake, risk.
- *   Bounded outputs prevent runaway motor commands.
+ * - **Output** (8 neurons, tanh): Learned features in [−1, +1].
+ *   Tanh (not sigmoid) because features are intermediate values fed into
+ *   MLP-Decide — symmetric range preserves directional information.
  *
- * Total trainable parameters: 55×32 + 32×4 weights + 32 + 4 biases = 1,924
- *
- * The MCP strategic layer manages this brain by:
- * - Setting/updating the goal vector via `setGoal()`
- * - Swapping weight sets via `loadWeights()` for terrain adaptation
- * - Reading the `escalate` flag to decide when to intervene
+ * Total params: 42×16 + 16×8 weights + 16 + 8 biases = **824**
  */
-export interface INavigatorBrain {
-    /** The underlying MLP graph (for weight inspection, mutation, serialization). */
+export interface IPerceptBrain {
+    /** The underlying MLP graph. */
     readonly graph: IMlpGraph;
 
-    /** Pre-compiled inference runtime for fast per-tick evaluation. */
+    /** Pre-compiled inference runtime. */
     readonly runtime: MLPInferenceRuntime;
 
-    /** Current brain configuration. */
-    readonly config: INavigatorBrainOptions;
+    /**
+     * Raw feed-forward: spatial sensors → learned features.
+     * @param input  Float array of length PERCEPT_INPUT_COUNT (42).
+     * @returns      Float array of length PERCEPT_OUTPUT_COUNT (8).
+     */
+    evaluate(input: number[]): number[];
 
     /**
-     * Feed-forward inference: sensor tensor → navigation output.
-     * This is the hot path — called at `inferenceRateHz`.
-     *
-     * @param input  Flattened float array of length NAVIGATOR_INPUT_COUNT (55).
-     * @returns      Float array of length NAVIGATOR_OUTPUT_COUNT (4):
+     * Replace weights from a serialized weight set.
+     */
+    loadWeights(uri: string, loader: IWeightLoader): Promise<void>;
+}
+
+/**
+ * The decision sub-brain: MLP-Decide.
+ *
+ * **Architecture: 21 → 16 → 4**
+ *
+ * - **Input** (21 neurons, linear): Perception features (8) + pose (6) +
+ *   wheel slip (4) + goal (3). Clean, learned features from MLP-Percept
+ *   replace the raw 36-sector depth grid — a much easier signal to learn from.
+ *
+ * - **Hidden** (16 neurons, tanh): Learns the control policy. 16 neurons
+ *   are sufficient because the input is already heavily processed (8 features
+ *   instead of 36 raw sectors).
+ *
+ * - **Output** (4 neurons, sigmoid): Steering, throttle, brake, risk in [0,1].
+ *   Sigmoid bounds all outputs to valid motor command ranges.
+ *
+ * Total params: 21×16 + 16×4 weights + 16 + 4 biases = **420**
+ */
+export interface IDecisionBrain {
+    /** The underlying MLP graph. */
+    readonly graph: IMlpGraph;
+
+    /** Pre-compiled inference runtime. */
+    readonly runtime: MLPInferenceRuntime;
+
+    /**
+     * Raw feed-forward: features + state + goal → motor outputs.
+     * @param input  Float array of length DECIDE_INPUT_COUNT (21).
+     * @returns      Float array of length DECIDE_OUTPUT_COUNT (4):
      *               [steering, throttle, brake, risk].
      */
     evaluate(input: number[]): number[];
 
     /**
-     * Build a structured `INavigationCommand` from raw MLP output,
-     * applying scaling (e.g., steering → radians) and the escalation threshold.
+     * Replace weights from a serialized weight set.
+     */
+    loadWeights(uri: string, loader: IWeightLoader): Promise<void>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cascaded navigator brain interface
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The cascaded MLP brain for reactive navigation.
+ *
+ * **Architecture: [42 → 16 → 8] → [21 → 16 → 4]**
+ *
+ * Two independent MLPs run in cascade on every tick:
+ *
+ * ```
+ * LiDAR sectors (36) ──┐
+ * IMU snapshot (6)    ──┤
+ *                       ▼
+ *               ┌──────────────┐
+ *               │  MLP-Percept  │  "What's around me?"
+ *               │  42 → 16 → 8 │  824 params
+ *               └──────┬───────┘
+ *                      │ 8 learned features
+ *                      ▼
+ * Pose/velocity (6)  ──┐
+ * Wheel slip (4)     ──┤
+ * Goal vector (3)    ──┤
+ * Percept output (8) ──┤
+ *                      ▼
+ *               ┌──────────────┐
+ *               │  MLP-Decide   │  "What do I do?"
+ *               │  21 → 16 → 4 │  420 params
+ *               └──────┬───────┘
+ *                      ▼
+ *               steering, throttle, brake, risk
+ * ```
+ *
+ * **Total trainable parameters**: 824 + 420 = **1,244**
+ *
+ * **Why cascaded?**
+ *
+ * - **Learned features > raw depth**: MLP-Percept compresses 36 depth
+ *   sectors into 8 meaningful signals. The decision MLP gets a cleaner
+ *   input than raw sensor data.
+ *
+ * - **Each MLP stays small and trainable**: fewer params per network
+ *   means faster convergence during training/evolution and less overfitting.
+ *
+ * - **Independent training**: perception can be trained on "label the
+ *   obstacles" tasks, then frozen while the decision MLP evolves on
+ *   "reach the goal" tasks. Or swap perception models for different
+ *   sensor configs without retraining the control policy.
+ *
+ * - **Interpretable intermediate layer**: the 8 percept outputs are
+ *   loggable, visualizable features. "Why did it turn left?" →
+ *   inspect the percept output, not 36 raw sectors.
+ *
+ * The MCP strategic layer manages this brain by:
+ * - Setting/updating the goal vector via `setGoal()`
+ * - Swapping weight sets independently via `loadPerceptWeights()` /
+ *   `loadDecisionWeights()` for terrain adaptation
+ * - Reading the `escalate` flag to decide when to intervene
+ */
+export interface INavigatorBrain {
+    /** Perception sub-brain: spatial sensors → learned features. */
+    readonly percept: IPerceptBrain;
+
+    /** Decision sub-brain: features + state + goal → motor commands. */
+    readonly decision: IDecisionBrain;
+
+    /** Current brain configuration. */
+    readonly config: INavigatorBrainOptions;
+
+    /**
+     * Full cascaded inference: raw sensor tensor → navigation output.
+     * Internally runs MLP-Percept then MLP-Decide in sequence.
+     *
+     * @param input  Structured input tensor with all sensor data.
+     * @returns      Motor-ready navigation command.
      */
     evaluateCommand(input: INavigatorInputTensor): INavigationCommand;
 
     /**
-     * Replace the current weights with a serialized weight set.
-     * Used by the MCP layer to swap behaviors (e.g., road vs off-road).
+     * Access the latest perception features (output of MLP-Percept).
+     * Useful for logging, debugging, and visualization.
      */
-    loadWeights(uri: string): Promise<void>;
+    readonly lastPerceptFeatures: number[] | null;
+
+    /**
+     * Replace perception MLP weights.
+     * Used to swap obstacle detection models for different environments.
+     */
+    loadPerceptWeights(uri: string): Promise<void>;
+
+    /**
+     * Replace decision MLP weights.
+     * Used to swap control policies (road vs off-road, calm vs aggressive).
+     */
+    loadDecisionWeights(uri: string): Promise<void>;
 
     /** Set or update the target waypoint. */
     setGoal(goal: INavigatorGoal): void;
@@ -253,24 +492,26 @@ export interface INavigatorBrain {
     readonly goal: INavigatorGoal | null;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 // Sensor node integration
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════
 
 export interface INavigationCommandEvent extends IRecord<INavigationCommand> {}
 
 /**
  * Navigator sensor node: lives in the simulation graph, consumes
- * upstream sensors each tick, runs the MLP, and emits navigation commands.
+ * upstream sensors each tick, runs the cascaded MLP, and emits
+ * navigation commands.
  *
  * `onTick(dtMs)` is the integration point:
  *   1. Read IMU, lidar, odometry, wheel encoders
- *   2. Flatten into input tensor
- *   3. Run MLP inference
- *   4. Emit INavigationCommand via sensor event
+ *   2. Build INavigatorInputTensor
+ *   3. Run MLP-Percept → learned features
+ *   4. Run MLP-Decide → motor commands
+ *   5. Emit INavigationCommand via sensor event
  */
 export interface INavigatorNode extends ISensorNode, ISensorReadable<INavigationCommand>, ISensorEventEmitter<INavigationCommandEvent> {
-    /** The MLP brain performing reactive inference. */
+    /** The cascaded MLP brain performing reactive inference. */
     readonly brain: INavigatorBrain;
 
     /** Fused odometry source. */

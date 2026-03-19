@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="'Segoe UI', system-ui, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#475569"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#16a34a"/>
+    </marker>
+    <filter id="sh" x="-3%" y="-3%" width="106%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#00000015"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#1e293b">Cascaded MLP — Tensor Layout</text>
+
+  <!-- ═══ PERCEPT INPUT ═══ -->
+  <text x="30" y="65" font-size="11" font-weight="600" fill="#1e40af" letter-spacing="0.5">PERCEPT INPUT (42 floats)</text>
+
+  <!-- LiDAR sectors block -->
+  <g filter="url(#sh)">
+    <rect x="30" y="75" width="280" height="42" rx="6" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.2"/>
+  </g>
+  <text x="170" y="95" text-anchor="middle" font-weight="600" fill="#1e40af">LiDAR Sectors</text>
+  <text x="170" y="110" text-anchor="middle" font-size="10" fill="#475569">[0..35] — 36 values · min depth per 10° sector</text>
+
+  <!-- IMU block -->
+  <g filter="url(#sh)">
+    <rect x="320" y="75" width="180" height="42" rx="6" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.2"/>
+  </g>
+  <text x="410" y="95" text-anchor="middle" font-weight="600" fill="#1e40af">IMU Snapshot</text>
+  <text x="410" y="110" text-anchor="middle" font-size="10" fill="#475569">[36..41] — ax, ay, az, gx, gy, gz</text>
+
+  <!-- Arrows down to MLP-Percept -->
+  <line x1="170" y1="117" x2="170" y2="148" stroke="#475569" stroke-width="1.3" marker-end="url(#arr)"/>
+  <line x1="410" y1="117" x2="410" y2="148" stroke="#475569" stroke-width="1.3" marker-end="url(#arr)"/>
+
+  <!-- ═══ MLP-PERCEPT ═══ -->
+  <g filter="url(#sh)">
+    <rect x="60" y="153" width="440" height="65" rx="10" fill="#d1fae5" stroke="#34d399" stroke-width="1.5"/>
+  </g>
+  <text x="280" y="178" text-anchor="middle" font-weight="700" font-size="15" fill="#065f46">MLP-Percept</text>
+
+  <!-- Layer nodes -->
+  <rect x="95" y="188" width="65" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="128" y="203" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">42 lin</text>
+
+  <line x1="162" y1="199" x2="190" y2="199" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-green)"/>
+
+  <rect x="195" y="188" width="65" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="228" y="203" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">16 tanh</text>
+
+  <line x1="262" y1="199" x2="290" y2="199" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-green)"/>
+
+  <rect x="295" y="188" width="65" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="328" y="203" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">8 tanh</text>
+
+  <text x="385" y="204" font-size="10" fill="#065f46" font-weight="600">824 params</text>
+
+  <!-- Arrow Percept → features -->
+  <line x1="280" y1="218" x2="280" y2="260" stroke="#16a34a" stroke-width="2" marker-end="url(#arr-green)"/>
+
+  <!-- Features label -->
+  <g filter="url(#sh)">
+    <rect x="195" y="262" width="170" height="28" rx="6" fill="#bbf7d0" stroke="#4ade80" stroke-width="1.2"/>
+  </g>
+  <text x="280" y="281" text-anchor="middle" font-weight="700" fill="#166534">8 Learned Features</text>
+
+  <!-- Arrow features → Decide -->
+  <line x1="280" y1="290" x2="280" y2="328" stroke="#475569" stroke-width="1.3" marker-end="url(#arr)"/>
+
+  <!-- ═══ DECIDE INPUT ═══ -->
+  <text x="30" y="315" font-size="11" font-weight="600" fill="#7c2d12" letter-spacing="0.5">DECIDE INPUT (21 floats)</text>
+
+  <!-- Side inputs -->
+  <g filter="url(#sh)">
+    <rect x="530" y="155" width="240" height="38" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+  </g>
+  <text x="650" y="175" text-anchor="middle" font-weight="600" fill="#92400e">Pose &amp; Velocity</text>
+  <text x="650" y="188" text-anchor="middle" font-size="10" fill="#78350f">[8..13] — x, y, θ, vx, vy, ω</text>
+
+  <g filter="url(#sh)">
+    <rect x="530" y="200" width="240" height="38" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+  </g>
+  <text x="650" y="220" text-anchor="middle" font-weight="600" fill="#92400e">Wheel Slip</text>
+  <text x="650" y="233" text-anchor="middle" font-size="10" fill="#78350f">[14..17] — 4 ratios (0 = grip, 1 = slip)</text>
+
+  <g filter="url(#sh)">
+    <rect x="530" y="245" width="240" height="38" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
+  </g>
+  <text x="650" y="265" text-anchor="middle" font-weight="600" fill="#92400e">Goal Vector</text>
+  <text x="650" y="278" text-anchor="middle" font-size="10" fill="#78350f">[18..20] — relative dx, dy, dθ</text>
+
+  <!-- Arrows from side inputs to Decide -->
+  <line x1="528" y1="174" x2="505" y2="360" stroke="#475569" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+  <line x1="528" y1="219" x2="505" y2="365" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="528" y1="264" x2="505" y2="370" stroke="#475569" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- ═══ MLP-DECIDE ═══ -->
+  <g filter="url(#sh)">
+    <rect x="60" y="333" width="440" height="65" rx="10" fill="#d1fae5" stroke="#34d399" stroke-width="1.5"/>
+  </g>
+  <text x="280" y="358" text-anchor="middle" font-weight="700" font-size="15" fill="#065f46">MLP-Decide</text>
+
+  <!-- Layer nodes -->
+  <rect x="95" y="368" width="65" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="128" y="383" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">21 lin</text>
+
+  <line x1="162" y1="379" x2="190" y2="379" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-green)"/>
+
+  <rect x="195" y="368" width="65" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="228" y="383" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">16 tanh</text>
+
+  <line x1="262" y1="379" x2="290" y2="379" stroke="#10b981" stroke-width="1.2" marker-end="url(#arr-green)"/>
+
+  <rect x="295" y="368" width="75" height="22" rx="5" fill="#fff" stroke="#10b981"/>
+  <text x="332" y="383" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">4 sigmoid</text>
+
+  <text x="395" y="384" font-size="10" fill="#065f46" font-weight="600">420 params</text>
+
+  <!-- Arrow Decide → outputs -->
+  <line x1="280" y1="398" x2="280" y2="435" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ OUTPUT ═══ -->
+  <text x="30" y="448" font-size="11" font-weight="600" fill="#9d174d" letter-spacing="0.5">OUTPUT (4 floats → INavigationCommand)</text>
+
+  <g filter="url(#sh)">
+    <rect x="30" y="458" width="140" height="42" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.2"/>
+  </g>
+  <text x="100" y="478" text-anchor="middle" font-weight="600" fill="#9d174d">Steering</text>
+  <text x="100" y="493" text-anchor="middle" font-size="10" fill="#831843">[0] → ±30° rad</text>
+
+  <g filter="url(#sh)">
+    <rect x="185" y="458" width="130" height="42" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.2"/>
+  </g>
+  <text x="250" y="478" text-anchor="middle" font-weight="600" fill="#9d174d">Throttle</text>
+  <text x="250" y="493" text-anchor="middle" font-size="10" fill="#831843">[1] → [0, 1]</text>
+
+  <g filter="url(#sh)">
+    <rect x="330" y="458" width="110" height="42" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.2"/>
+  </g>
+  <text x="385" y="478" text-anchor="middle" font-weight="600" fill="#9d174d">Brake</text>
+  <text x="385" y="493" text-anchor="middle" font-size="10" fill="#831843">[2] → [0, 1]</text>
+
+  <g filter="url(#sh)">
+    <rect x="455" y="458" width="130" height="42" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.2"/>
+  </g>
+  <text x="520" y="478" text-anchor="middle" font-weight="600" fill="#9d174d">Risk</text>
+  <text x="520" y="493" text-anchor="middle" font-size="10" fill="#831843">[3] → escalate if ≥ 0.8</text>
+
+  <!-- Total params -->
+  <g filter="url(#sh)">
+    <rect x="620" y="355" width="150" height="36" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  </g>
+  <text x="695" y="370" text-anchor="middle" font-size="10" fill="#475569">TOTAL</text>
+  <text x="695" y="385" text-anchor="middle" font-size="14" font-weight="700" fill="#166534">1,244 params</text>
+</svg>
