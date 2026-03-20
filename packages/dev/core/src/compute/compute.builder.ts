@@ -16,7 +16,6 @@ import {
     ExternalInputNode,
     MLPNode,
 } from "./compute.nodes";
-import { IMatchingCortexConfig, MatchingCortexNode } from "./compute.matching-cortex";
 
 // ─── Shared config types ─────────────────────────────────────────────────────
 
@@ -144,31 +143,20 @@ export class PipelineBuilder {
     }
 
     /**
-     * Config C: Stereo with learned MatchingCortex.
+     * Config C: Stereo with learned CNN matching (placeholder).
      *
      * ```
-     * [stereo_pair] → [matching_cortex] → [percept_cortex] → [decision_cortex]
+     * [stereo_pair] → [matching_cnn] → [percept_cortex] → [decision_cortex]
      * ```
      *
-     * The MatchingCortex replaces both stereo matching AND convolution —
-     * it directly outputs sector-resolution depth.
+     * The CNN matcher replaces both stereo matching AND convolution —
+     * it directly outputs sector-resolution depth. Requires CNN
+     * infrastructure in spiky-panda-ext (under development).
+     *
+     * TODO: implement once CNN layers are available in spiky-panda-ext.
      */
-    public static stereoMLP(
-        config: IPipelineConfig,
-        matchingConfig: IMatchingCortexConfig
-    ): ComputeGraph {
-        const nodes: IComputeNode[] = [];
-        const links: DataLink[] = [];
-
-        const stereoInput = new ExternalInputNode("stereo_pair", [matchingConfig.imageHeight, matchingConfig.imageWidth, 2]);
-        const matchingCortex = new MatchingCortexNode(matchingConfig);
-
-        links.push(connect(stereoInput, matchingCortex));
-        nodes.push(stereoInput, matchingCortex);
-
-        buildPerceptDecisionTail(matchingCortex, config, nodes, links);
-
-        return new ComputeGraph(nodes, links);
+    public static stereoCNN(_config: IPipelineConfig): ComputeGraph {
+        throw new Error("stereoCNN pipeline not yet implemented — CNN infrastructure required in spiky-panda-ext");
     }
 
     /**

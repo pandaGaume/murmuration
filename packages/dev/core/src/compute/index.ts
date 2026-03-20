@@ -3,5 +3,4 @@ export * from "@dev/spiky-panda/compute";
 
 // Murmuration-specific compute nodes
 export * from "./compute.nodes";
-export * from "./compute.matching-cortex";
 export * from "./compute.builder";

@@ -11,7 +11,7 @@
 //
 // Usage:
 //   [LidarSource] ──► [Convolution] ──► [PerceptCortex] ──► [DecisionCortex]
-//   [StereoCapture] ──► [MatchingCortex] ──► [Convolution] ──► [Percept] ──► [Decision]
+//   [StereoCapture] ──► [MatchingCNN] ──► [Convolution] ──► [Percept] ──► [Decision]
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { IGraph, INode, IOlink } from "@spiky-panda/core";
