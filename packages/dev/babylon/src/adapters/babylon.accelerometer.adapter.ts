@@ -1,7 +1,7 @@
-import { Cartesian3, GraphNode, ICartesian3, IDisposable } from "@spiky-panda/core";
+import { Cartesian3, ICartesian3, IDisposable } from "@spiky-panda/core";
 import { TransformNode, Vector3 } from "@babylonjs/core";
 import { IAccelerometerEvent, IAccelerometerNode, ISensor } from "@dev/core/perception";
-import { ISimSpace } from "@dev/core/simulation";
+import { ISimSpace, SimTreeNode } from "@dev/core/simulation";
 import { generateId } from "@dev/core/utils";
 
 import { toCartesian3 } from "../utils";
@@ -21,7 +21,7 @@ import { toCartesian3 } from "../utils";
  * Output is in m/s² in world space, matching the Babylon scene's coordinate
  * system (Y-up by default).
  */
-export class BabylonAccelerometerAdapter extends GraphNode implements IAccelerometerNode {
+export class BabylonAccelerometerAdapter extends SimTreeNode implements IAccelerometerNode {
     private _node: TransformNode;
     private _prevPosition: Vector3 | null = null;
     private _prevVelocity: Vector3 | null = null;
@@ -58,7 +58,7 @@ export class BabylonAccelerometerAdapter extends GraphNode implements IAccelerom
 
     // -- ISimNode lifecycle --
 
-    public onTick(dtMs: number): void {
+    protected override onSelfTick(dtMs: number): void {
         const dtSec = dtMs / 1000;
         if (dtSec <= 0) return;
 
@@ -103,13 +103,13 @@ export class BabylonAccelerometerAdapter extends GraphNode implements IAccelerom
         }
     }
 
-    public onAdded(_space: ISimSpace): void {
+    protected override onSelfAdded(_space: ISimSpace): void {
         // Reset warm-up state when added to a new simulation.
         this._prevPosition = null;
         this._prevVelocity = null;
     }
 
-    public onRemoved(_space: ISimSpace): void {
+    protected override onSelfRemoved(_space: ISimSpace): void {
         this._listeners.length = 0;
     }
 

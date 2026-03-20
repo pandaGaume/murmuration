@@ -8,7 +8,7 @@
         "skipLibCheck": true,
         "paths": {
             "@dev/core/*": ["dev/core/dist/*"],
-            "@dev/babylon/*": ["dev/babylon/src/*"]
+            "@dev/training/*": ["dev/training/src/*"]
         }
     },
 

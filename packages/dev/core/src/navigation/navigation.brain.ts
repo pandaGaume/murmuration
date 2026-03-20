@@ -59,7 +59,7 @@ const MAX_STEER_RAD = Math.PI / 6;
  * @param fanout  Number of neurons in the destination layer.
  * @returns       A configured `LayerConnectionBuilder`.
  */
-function createConnBuilder(fanin: number, fanout: number): ILayerConnectionBuilder {
+function createConnBuilderWithGlorot(fanin: number, fanout: number): ILayerConnectionBuilder {
     const synapseBuilder = new SynapseBuilder().withType(MlpSynapse) as SynapseBuilder;
     return new LayerConnectionBuilder().withSynapseBuilder(synapseBuilder).withType(LayerConnectionType.FullyConnected).withWeightInitializer(new Glorot(fanin, fanout));
 }
@@ -145,9 +145,9 @@ export class PerceptCortex implements IPerceptCortex {
         const builder = new PerceptronBuilder()
             .withInputLayer(PERCEPT_INPUT_COUNT, 0, ActivationFunctions.linear)
             .withHiddenLayer(hiddenSize, 0, ActivationFunctions.tanh)
-            .withConnectionBuilder(createConnBuilder(PERCEPT_INPUT_COUNT, hiddenSize))
+            .withConnectionBuilder(createConnBuilderWithGlorot(PERCEPT_INPUT_COUNT, hiddenSize))
             .withOutputLayer(outputSize, 0, ActivationFunctions.tanh) // tanh for intermediate features
-            .withConnectionBuilder(createConnBuilder(hiddenSize, outputSize));
+            .withConnectionBuilder(createConnBuilderWithGlorot(hiddenSize, outputSize));
 
         return builder.build();
     }
@@ -239,9 +239,9 @@ export class DecisionCortex implements IDecisionCortex {
         const builder = new PerceptronBuilder()
             .withInputLayer(DECIDE_INPUT_COUNT, 0, ActivationFunctions.linear)
             .withHiddenLayer(hiddenSize, 0, ActivationFunctions.tanh)
-            .withConnectionBuilder(createConnBuilder(DECIDE_INPUT_COUNT, hiddenSize))
+            .withConnectionBuilder(createConnBuilderWithGlorot(DECIDE_INPUT_COUNT, hiddenSize))
             .withOutputLayer(DECIDE_OUTPUT_COUNT, 0, ActivationFunctions.sigmoid)
-            .withConnectionBuilder(createConnBuilder(hiddenSize, DECIDE_OUTPUT_COUNT));
+            .withConnectionBuilder(createConnBuilderWithGlorot(hiddenSize, DECIDE_OUTPUT_COUNT));
 
         return builder.build();
     }

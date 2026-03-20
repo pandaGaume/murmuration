@@ -1,8 +1,8 @@
-import { Cartesian3, GraphNode, ICartesian3, IDisposable } from "@spiky-panda/core";
+import { Cartesian3, ICartesian3, IDisposable } from "@spiky-panda/core";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Quaternion } from "@babylonjs/core/Maths/math.vector";
 import { IGyroEvent, IGyroNode, ISensor } from "@dev/core/perception";
-import { ISimSpace } from "@dev/core/simulation";
+import { ISimSpace, SimTreeNode } from "@dev/core/simulation";
 import { generateId } from "@dev/core/utils";
 import { angularVelocityFromQuaternions, toCartesian3 } from "../utils";
 
@@ -18,7 +18,7 @@ import { angularVelocityFromQuaternions, toCartesian3 } from "../utils";
  * If the tracked node uses Euler angles (`rotation`) instead of
  * `rotationQuaternion`, the adapter converts to quaternion internally.
  */
-export class BabylonGyroscopeAdapter extends GraphNode implements IGyroNode {
+export class BabylonGyroscopeAdapter extends SimTreeNode implements IGyroNode {
     private _node: TransformNode;
     private _prevQuaternion: Quaternion | null = null;
     private _lastReading: ICartesian3 = Cartesian3.Zero();
@@ -54,7 +54,7 @@ export class BabylonGyroscopeAdapter extends GraphNode implements IGyroNode {
 
     // -- ISimNode lifecycle --
 
-    public onTick(dtMs: number): void {
+    protected override onSelfTick(dtMs: number): void {
         const dtSec = dtMs / 1000;
         if (dtSec <= 0) return;
 
@@ -88,11 +88,11 @@ export class BabylonGyroscopeAdapter extends GraphNode implements IGyroNode {
         }
     }
 
-    public onAdded(_space: ISimSpace): void {
+    protected override onSelfAdded(_space: ISimSpace): void {
         this._prevQuaternion = null;
     }
 
-    public onRemoved(_space: ISimSpace): void {
+    protected override onSelfRemoved(_space: ISimSpace): void {
         this._listeners.length = 0;
     }
 

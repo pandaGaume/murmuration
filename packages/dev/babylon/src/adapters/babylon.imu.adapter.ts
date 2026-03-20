@@ -1,7 +1,6 @@
-import { GraphNode } from "@spiky-panda/core";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { IAccelerometerNode, IGyroNode, IIMU6Node } from "@dev/core/perception";
-import { ISimSpace } from "@dev/core/simulation";
+import { SimTreeNode } from "@dev/core/simulation";
 import { generateId } from "@dev/core/utils";
 import { BabylonAccelerometerAdapter } from "./babylon.accelerometer.adapter";
 import { BabylonGyroscopeAdapter } from "./babylon.gyroscope.adapter";
@@ -11,7 +10,7 @@ import { BabylonGyroscopeAdapter } from "./babylon.gyroscope.adapter";
  *
  * Composite sensor that owns a `BabylonAccelerometerAdapter` and a
  * `BabylonGyroscopeAdapter`, both tracking the same `TransformNode`.
- * Propagates simulation lifecycle callbacks to both children.
+ * Lifecycle propagation is handled automatically by `SimTreeNode`.
  *
  * Usage:
  * ```typescript
@@ -20,7 +19,7 @@ import { BabylonGyroscopeAdapter } from "./babylon.gyroscope.adapter";
  * // imu.gyro.sensorRead() → ICartesian3 (gx, gy, gz) in rad/s
  * ```
  */
-export class BabylonIMUAdapter extends GraphNode implements IIMU6Node {
+export class BabylonIMUAdapter extends SimTreeNode implements IIMU6Node {
     /** 3-axis accelerometer sub-sensor. */
     public readonly acc: IAccelerometerNode;
 
@@ -34,30 +33,7 @@ export class BabylonIMUAdapter extends GraphNode implements IIMU6Node {
     public constructor(node: TransformNode) {
         super();
         this.id = generateId("imu6");
-        this.acc = new BabylonAccelerometerAdapter(node);
-        this.gyro = new BabylonGyroscopeAdapter(node);
-    }
-
-    // -- ISimNode lifecycle (propagate to children) --
-
-    public onTick(dtMs: number): void {
-        (this.acc as BabylonAccelerometerAdapter).onTick(dtMs);
-        (this.gyro as BabylonGyroscopeAdapter).onTick(dtMs);
-    }
-
-    public onAdded(space: ISimSpace): void {
-        (this.acc as BabylonAccelerometerAdapter).onAdded(space);
-        (this.gyro as BabylonGyroscopeAdapter).onAdded(space);
-    }
-
-    public onRemoved(space: ISimSpace): void {
-        (this.acc as BabylonAccelerometerAdapter).onRemoved(space);
-        (this.gyro as BabylonGyroscopeAdapter).onRemoved(space);
-    }
-
-    public override dispose(): void {
-        (this.acc as BabylonAccelerometerAdapter).dispose();
-        (this.gyro as BabylonGyroscopeAdapter).dispose();
-        super.dispose();
+        this.acc = this.addChild(new BabylonAccelerometerAdapter(node));
+        this.gyro = this.addChild(new BabylonGyroscopeAdapter(node));
     }
 }

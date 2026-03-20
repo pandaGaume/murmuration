@@ -32,15 +32,17 @@ export const PERCEPT_INPUT_COUNT = 42;
 /**
  * Number of learned features the perception MLP outputs.
  *
- * These features are not hand-designed — the MLP learns to compress
- * 42 raw spatial inputs into 8 meaningful signals. Conceptually they
- * converge toward:
- *   - Front obstacle distance (near/far)
- *   - Front obstacle bearing (left/right of center)
- *   - Side clearance (left / right)
- *   - Closing rate (from IMU + depth delta)
- *   - Open corridor direction
- *   - Terrain roughness signal (from IMU vibration)
+ * Each output neuron has a formal definition — see `PerceptFeatureIndex`
+ * for the full specification with ground truth computations:
+ *
+ *   [0] frontObstacleProximity — 0 (far) → 1 (contact)
+ *   [1] frontObstacleBearing   — −1 (left) → +1 (right)
+ *   [2] leftClearance          — 0 (wall) → 1 (open)
+ *   [3] rightClearance         — 0 (wall) → 1 (open)
+ *   [4] closingRate            — −1 (approaching) → +1 (receding)
+ *   [5] corridorDirection      — −1 (left) → +1 (right)
+ *   [6] terrainRoughness       — 0 (smooth) → 1 (rough)
+ *   [7] confidence             — 0 (unreliable) → 1 (high trust)
  *
  * 8 features is a sweet spot: enough to encode the spatial situation,
  * compact enough to be a clean input for the decision MLP.
@@ -107,17 +109,154 @@ export interface IPerceptInputTensor {
 
 /**
  * Output of the perception MLP — learned environment features.
+ *
+ * Each index has a formal definition used to generate supervised training
+ * labels. During end-to-end evolutionary training the features may drift
+ * from these definitions toward whatever representation best serves the
+ * decision cortex.
+ *
+ * **Ground truth computations** (for training set generation):
+ *
+ * The 36 LiDAR sectors span the horizontal FOV:
+ *   - Sectors 0–8:   left quadrant
+ *   - Sectors 9–17:  front-left
+ *   - Sectors 18–26: front-right
+ *   - Sectors 27–35: right quadrant
+ *   - "Front sectors" = 9–26 (central 180°)
  */
 export interface IPerceptOutputTensor {
     /**
-     * Learned obstacle/environment features.
-     * Length = PERCEPT_OUTPUT_COUNT (8).
-     *
-     * Not hand-designed — the MLP learns to encode the spatial situation
-     * into these features during training/evolution. They become the
-     * perception input to the decision MLP.
+     * Raw feature vector (length = PERCEPT_OUTPUT_COUNT = 8).
+     * Use the named accessors below for semantic clarity, or this
+     * array for batch processing and MLP I/O.
      */
     features: number[];
+}
+
+// ─── Named perception output indices ─────────────────────────────────────────
+
+/**
+ * Indices into the `IPerceptOutputTensor.features` array.
+ * Each constant maps to a formally defined perception output.
+ */
+export const enum PerceptFeatureIndex {
+    /**
+     * **Front obstacle proximity** — range [0, 1]
+     *
+     * How close the nearest obstacle in the front sectors (9–26) is.
+     * - 0.0 = nothing within maxRange
+     * - 1.0 = contact / zero distance
+     *
+     * Ground truth: `clamp(1.0 − min(depth[9..26]) / maxRange, 0, 1)`
+     */
+    FrontObstacleProximity = 0,
+
+    /**
+     * **Front obstacle bearing** — range [−1, +1]
+     *
+     * Angular position of the nearest front obstacle relative to heading.
+     * - −1.0 = hard left
+     * -  0.0 = dead center
+     * - +1.0 = hard right
+     *
+     * Ground truth: weighted angular centroid of front obstacles below a
+     * distance threshold, using inverse-depth weighting:
+     * ```
+     * For each front sector i where depth[i] < threshold:
+     *     sum += angle[i] × (1 / depth[i])
+     *     w   += (1 / depth[i])
+     * centroid = sum / w
+     * output   = clamp(centroid / halfFov, −1, +1)
+     * ```
+     */
+    FrontObstacleBearing = 1,
+
+    /**
+     * **Left clearance** — range [0, 1]
+     *
+     * Average free space on the left side (sectors 0–8).
+     * - 0.0 = wall / fully blocked
+     * - 1.0 = wide open
+     *
+     * Ground truth: `clamp(mean(depth[0..8]) / maxRange, 0, 1)`
+     */
+    LeftClearance = 2,
+
+    /**
+     * **Right clearance** — range [0, 1]
+     *
+     * Average free space on the right side (sectors 27–35).
+     * - 0.0 = wall / fully blocked
+     * - 1.0 = wide open
+     *
+     * Ground truth: `clamp(mean(depth[27..35]) / maxRange, 0, 1)`
+     */
+    RightClearance = 3,
+
+    /**
+     * **Closing rate** — range [−1, +1]
+     *
+     * Rate of approach to the nearest front obstacle.
+     * - −1.0 = approaching fast
+     * -  0.0 = static / no relative motion
+     * - +1.0 = receding fast
+     *
+     * Ground truth (two methods, pick based on available data):
+     * - IMU-based:  `dot(linearAccel, forwardUnitVector) / maxAccel`
+     * - Depth-based: `(prevMinFrontDepth − currMinFrontDepth) / (dt × maxSpeed)`
+     *
+     * Output: `clamp(value, −1, +1)`
+     */
+    ClosingRate = 4,
+
+    /**
+     * **Corridor direction** — range [−1, +1]
+     *
+     * Direction of the most open corridor (deepest depth reading).
+     * - −1.0 = best path is hard left
+     * -  0.0 = straight ahead
+     * - +1.0 = best path is hard right
+     *
+     * Ground truth:
+     * ```
+     * bestSector = argmax(depth[0..35])
+     * bestAngle  = angle[bestSector]
+     * output     = clamp(bestAngle / halfFov, −1, +1)
+     * ```
+     */
+    CorridorDirection = 5,
+
+    /**
+     * **Terrain roughness** — range [0, 1]
+     *
+     * Vibration intensity derived from IMU accelerometer.
+     * - 0.0 = smooth surface
+     * - 1.0 = very rough terrain
+     *
+     * Ground truth:
+     * ```
+     * window   = last N IMU acceleration samples (e.g., N = 10)
+     * variance = var(‖accel‖ for each sample in window)
+     * output   = clamp(variance / maxVariance, 0, 1)
+     * ```
+     */
+    TerrainRoughness = 6,
+
+    /**
+     * **Confidence** — range [0, 1]
+     *
+     * Overall reliability of the perception reading.
+     * - 0.0 = unreliable (noisy, contradictory, saturated)
+     * - 1.0 = high trust
+     *
+     * Ground truth (factors that reduce confidence):
+     * - High variance across adjacent LiDAR sectors (noisy returns)
+     * - IMU readings near sensor limits (saturated accelerometer)
+     * - Large discrepancy between IMU-derived motion and encoder-derived motion
+     *
+     * `output = 1.0 − clamp(combined_noise_score, 0, 1)`
+     */
+    Confidence = 7,
 }
 
 /**

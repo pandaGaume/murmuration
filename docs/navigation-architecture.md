@@ -74,12 +74,98 @@ spatial inputs into 8 meaningful features. These features are **not
 hand-designed** — the network learns to encode them during training or
 evolution. Conceptually, they converge toward signals like:
 
-- Front obstacle distance (near/far)
-- Front obstacle bearing (left/right of center)
-- Side clearance (left / right)
-- Closing rate (from IMU acceleration + depth changes)
-- Open corridor direction (where is the most free space)
-- Terrain roughness (from IMU vibration pattern)
+#### Formal Definition of the 8 Perception Outputs
+
+Each output neuron has a precise definition, numeric range, and a computable
+ground truth used to build supervised training sets. During end-to-end
+evolutionary training the features may drift from these definitions toward
+whatever representation best serves the decision cortex.
+
+| Index | Name                     | Range          | Definition                                                                                                    |
+| ----- | ------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| 0     | `frontObstacleProximity` | 0.0 → 1.0     | How close the nearest front obstacle is. 0 = nothing within maxRange, 1 = contact.                            |
+| 1     | `frontObstacleBearing`   | −1.0 → +1.0   | Angular position of the nearest front obstacle. −1 = hard left, 0 = dead center, +1 = hard right.            |
+| 2     | `leftClearance`          | 0.0 → 1.0     | Average free space on the left side. 0 = wall, 1 = wide open.                                                |
+| 3     | `rightClearance`         | 0.0 → 1.0     | Average free space on the right side. 0 = wall, 1 = wide open.                                               |
+| 4     | `closingRate`            | −1.0 → +1.0   | Rate of approach to the nearest front obstacle. −1 = approaching fast, 0 = static, +1 = receding.            |
+| 5     | `corridorDirection`      | −1.0 → +1.0   | Direction of the most open corridor. −1 = best path is hard left, 0 = straight, +1 = hard right.             |
+| 6     | `terrainRoughness`       | 0.0 → 1.0     | Vibration intensity from IMU. 0 = smooth surface, 1 = very rough terrain.                                     |
+| 7     | `confidence`             | 0.0 → 1.0     | Overall reliability of the perception reading. 0 = unreliable (noisy/contradictory), 1 = high trust.          |
+
+**Ground truth computations** (used to generate supervised training labels):
+
+```
+# Sector layout: 36 LiDAR sectors spanning the horizontal FOV
+# Sectors 0–8: left quadrant, 9–17: front-left, 18–26: front-right, 27–35: right quadrant
+# "Front sectors" = sectors 9–26 (central 180°)
+# "Left sectors"  = sectors 0–8
+# "Right sectors" = sectors 27–35
+
+[0] frontObstacleProximity:
+    minFront = min(depth[9..26])
+    output   = clamp(1.0 − minFront / maxRange, 0, 1)
+
+[1] frontObstacleBearing:
+    For each front sector i in [9..26] where depth[i] < threshold:
+        accumulate weighted angle: sum += angle[i] × (1 / depth[i])
+        accumulate weight:        w   += (1 / depth[i])
+    centroid = sum / w                        (angular centroid of close obstacles)
+    output   = clamp(centroid / halfFov, −1, +1)  (normalize to [−1, +1])
+
+[2] leftClearance:
+    output = clamp(mean(depth[0..8]) / maxRange, 0, 1)
+
+[3] rightClearance:
+    output = clamp(mean(depth[27..35]) / maxRange, 0, 1)
+
+[4] closingRate:
+    Method A (IMU-based):  dot(linearAccel, forwardUnitVector) / maxAccel
+    Method B (depth-based): (prevMinFrontDepth − currMinFrontDepth) / (dt × maxSpeed)
+    output = clamp(value, −1, +1)   (negative = closing, positive = receding)
+
+[5] corridorDirection:
+    bestSector = argmax(depth[0..35])    (sector with deepest reading)
+    bestAngle  = angle[bestSector]        (angular direction of that sector)
+    output     = clamp(bestAngle / halfFov, −1, +1)
+
+[6] terrainRoughness:
+    window = last N IMU acceleration samples (e.g., N = 10)
+    variance = var(‖accel‖ for each sample in window)
+    output   = clamp(variance / maxVariance, 0, 1)
+
+[7] confidence:
+    Factors that reduce confidence:
+      − High variance across adjacent LiDAR sectors (noisy returns)
+      − IMU readings near sensor limits (saturated accelerometer)
+      − Large discrepancy between IMU-derived motion and encoder-derived motion
+    output = 1.0 − clamp(combined_noise_score, 0, 1)
+```
+
+**Activation function note:** The perception outputs use **tanh** (range
+[−1, +1]), which covers outputs 1, 4, and 5 naturally. Outputs 0, 2, 3, 6,
+and 7 are defined in [0, 1] — during supervised training the labels are
+remapped to [0, +1] which is the positive half of tanh's range. The network
+learns to stay in the appropriate half.
+
+#### Training Strategy
+
+The percept cortex is trained in three phases:
+
+1. **Phase 1 — Supervised pre-training**: Generate thousands of synthetic
+   scenarios (random obstacle layouts, rover poses, terrain types). Compute
+   the 8 labels using the ground truth formulas above. Train with MSE loss
+   to approximate them. This gives a **working starting point** — the cortex
+   can already "see."
+
+2. **Phase 2 — End-to-end evolutionary training**: Both cortexes evolve
+   together using a fitness function (reach goal, avoid collisions, minimize
+   time). The percept features drift from the exact algorithmic definitions
+   toward whatever representation best helps navigation. This is the same
+   mutation-based approach used in `CreatureBrain`.
+
+3. **Phase 3 — MCP strategic override**: The LLM layer monitors fitness,
+   confidence, and slip status. It can trigger weight reloads, parameter
+   adjustments, or goal changes at any time.
 
 #### Stage 2 — MLP-Decide (Decision)
 

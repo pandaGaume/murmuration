@@ -1,12 +1,28 @@
-import { GraphNode, IDisposable } from "@spiky-panda/core";
-import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import { IDisposable } from "@spiky-panda/core";
+import { Camera } from "@babylonjs/core/Cameras/camera";
 import { Scene } from "@babylonjs/core/scene";
-import { Ray } from "@babylonjs/core/Culling/ray";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
-import { ILidarEvent, ILidarNode, ILidarScanMetadata, ILidarScanOptions, ILidarScanResult, ISensor, LidarBeams, LidarEncoding } from "@dev/core/perception";
-import { ISimSpace } from "@dev/core/simulation";
+import { DepthRenderer } from "@babylonjs/core/Rendering/depthRenderer";
+import {
+    IConvolutionConfig,
+    IConvolutionProvider,
+    IDepthBuffer,
+    IDepthBufferProvider,
+    ILidarEvent,
+    ILidarNode,
+    ILidarScanMetadata,
+    ILidarScanOptions,
+    ILidarScanResult,
+    ISensor,
+    LidarBeams,
+    LidarEncoding,
+    LidarUnit,
+    MathConvolution,
+} from "@dev/core/perception";
+import { ISimSpace, SimTreeNode } from "@dev/core/simulation";
+import { Length, Quantity, Unit } from "@dev/core/math";
 import { generateId } from "@dev/core/utils";
+
+const RAD_TO_DEG = 180 / Math.PI;
 
 /**
  * Default lidar scan parameters.
@@ -14,10 +30,7 @@ import { generateId } from "@dev/core/utils";
 const DEFAULTS = {
     beams: 16 as LidarBeams,
     angularResolution: 1.0,
-    encoding: "uint16" as LidarEncoding,
     maxRange: 100,
-    hFov: 360,
-    vFov: 30,
 };
 
 /**
@@ -27,72 +40,106 @@ export interface IBabylonLidarOptions {
     /** Default scan parameters (used by onTick auto-scan). */
     defaults?: Partial<ILidarScanOptions>;
 
-    /** Horizontal field of view in degrees. Default: 360 (spinning lidar). */
-    hFov?: number;
-
-    /** Vertical field of view in degrees. Default: 30. */
-    vFov?: number;
+    /**
+     * Override the convolution provider.
+     * Default: `MathConvolution` (CPU average/min/max pooling).
+     * Can be replaced with a GPU-based implementation.
+     */
+    convolution?: IConvolutionProvider;
 
     /**
-     * Optional predicate to filter which meshes are hit by rays.
-     * If not provided, all meshes in the scene are candidates.
+     * Pooling strategy for downsampling the depth buffer.
+     * - `"min"`: closest obstacle per sector (safest for navigation).
+     * - `"average"`: mean depth per sector (smoother).
+     * - `"max"`: farthest point per sector (corridor detection).
+     * Default: `"min"`.
      */
-    pickPredicate?: (mesh: AbstractMesh) => boolean;
+    pooling?: "average" | "min" | "max";
 }
 
 /**
- * Babylon.js adapter for a lidar sensor using CPU raycasting.
+ * Babylon.js lidar adapter — **decorator around a Camera**.
  *
- * Casts rays from a `TransformNode`'s world position in a grid pattern
- * defined by vertical beams and horizontal columns (derived from FOV
- * and angular resolution). Each ray reports the distance to the nearest
- * hit, or 0 if nothing is within range — matching real lidar behavior
- * for sky / out-of-range returns.
+ * Wraps a Babylon `Camera` and uses its `DepthRenderer` to read the
+ * GPU depth buffer, then downsamples it into a compact sector grid
+ * via the `IConvolutionProvider` (default: `MathConvolution`).
  *
- * **Performance note**: CPU raycasting is O(beams × columns × scene triangles).
- * For dense scans (64 beams × 360 columns = 23,040 rays), consider using
- * Babylon's `DepthRenderer` (GPU) for better performance. This adapter
- * prioritizes simplicity and precision over throughput.
+ * This follows the same pipeline as the MCP `camera_lidar` tool:
  *
- * **Coordinate convention**: the origin's local Z axis is "forward",
- * Y is "up". Horizontal sweep is around Y, vertical sweep tilts away
- * from the XZ plane. This matches Babylon's default coordinate system.
+ * ```
+ * Camera → DepthRenderer → readPixels() → IDepthBuffer
+ *     → IConvolutionProvider.downsample() → Float32Array (meters)
+ *         → ILidarScanResult
+ * ```
+ *
+ * **Why decorate a Camera?**
+ * - The depth buffer IS a dense LiDAR scan — the GPU already solved
+ *   ray-triangle intersection for every pixel via rasterization.
+ * - No CPU raycasting needed. O(1) per frame regardless of scene complexity.
+ * - FOV, near/far planes, position, orientation — all come from the Camera.
+ * - Multiple LiDAR configurations can share the same Camera's depth buffer,
+ *   just with different convolution parameters.
+ *
+ * **Performance**: reading the GPU depth buffer is async (readPixels).
+ * The adapter caches the last result for synchronous `sensorRead()` access,
+ * and updates it each `onTick()`.
+ *
+ * Implements `IDepthBufferProvider` so it can also be plugged into the
+ * training pipeline for validation against GPU-rendered scenes.
  */
-export class BabylonLidarAdapter extends GraphNode implements ILidarNode {
-    private _scene: Scene;
-    private _origin: TransformNode;
-    private _hFov: number;
-    private _vFov: number;
-    private _scanDefaults: Partial<ILidarScanOptions>;
-    private _pickPredicate: ((mesh: AbstractMesh) => boolean) | undefined;
+export class BabylonLidarAdapter extends SimTreeNode implements ILidarNode, IDepthBufferProvider<Camera> {
+    private readonly _scene: Scene;
+    private readonly _camera: Camera;
+    private readonly _convolution: IConvolutionProvider;
+    private readonly _pooling: "average" | "min" | "max";
+    private readonly _scanDefaults: Partial<ILidarScanOptions>;
 
-    private _cachedResult: ILidarScanResult = { data: "", metadata: this._emptyMetadata() };
+    private _depthRenderer: DepthRenderer | null = null;
+    private _cachedResult: ILidarScanResult = { data: new Float32Array(0), metadata: this._emptyMetadata() };
     private _listeners: Array<(src: ISensor, data: ILidarEvent[]) => void> = [];
+    private _pendingScan = false;
 
     /**
-     * @param scene   The Babylon.js scene (needed for raycasting).
-     * @param origin  The TransformNode defining the lidar's position and orientation.
-     * @param options Configuration: FOV, defaults, pick predicate.
+     * @param scene   The Babylon.js scene.
+     * @param camera  The Camera to decorate. Its depth buffer provides the LiDAR data.
+     * @param options Configuration: defaults, convolution provider, pooling strategy.
      */
-    public constructor(scene: Scene, origin: TransformNode, options?: IBabylonLidarOptions) {
+    public constructor(scene: Scene, camera: Camera, options?: IBabylonLidarOptions) {
         super();
         this.id = generateId("lidar");
         this._scene = scene;
-        this._origin = origin;
-        this._hFov = options?.hFov ?? DEFAULTS.hFov;
-        this._vFov = options?.vFov ?? DEFAULTS.vFov;
+        this._camera = camera;
+        this._convolution = options?.convolution ?? new MathConvolution();
+        this._pooling = options?.pooling ?? "min";
         this._scanDefaults = options?.defaults ?? {};
-        this._pickPredicate = options?.pickPredicate;
     }
 
-    // -- ISensorReadable<ILidarScanResult> --
+    /** The decorated Camera. */
+    public get camera(): Camera {
+        return this._camera;
+    }
+
+    // ── IDepthBufferProvider<Camera> ──────────────────────────────────────
+
+    /**
+     * Read the Camera's GPU depth buffer as an `IDepthBuffer`.
+     *
+     * Enables the scene's `DepthRenderer` for this camera, renders one
+     * frame, reads back the depth texture, and returns normalized [0,1]
+     * depth values.
+     */
+    public async render(_context: Camera, width: number, height: number): Promise<IDepthBuffer> {
+        return this._readDepthBuffer(width, height);
+    }
+
+    // ── ISensorReadable<ILidarScanResult> ────────────────────────────────
 
     /** Return the cached result from the last auto-scan (onTick). */
     public sensorRead(): ILidarScanResult {
         return this._cachedResult;
     }
 
-    // -- ISensorEventEmitter<ILidarEvent> --
+    // ── ISensorEventEmitter<ILidarEvent> ─────────────────────────────────
 
     public onSensorEvent(callback: (src: ISensor, data: ILidarEvent[]) => void): IDisposable {
         this._listeners.push(callback);
@@ -104,136 +151,255 @@ export class BabylonLidarAdapter extends GraphNode implements ILidarNode {
         };
     }
 
-    // -- ILidarNode --
+    // ── ILidarNode ───────────────────────────────────────────────────────
 
     /**
-     * Perform a lidar scan by casting rays in a beams × columns grid.
+     * Perform a lidar scan using the Camera's GPU depth buffer.
      *
-     * Each ray is cast from the origin's world position along a direction
-     * derived from the origin's orientation, rotated by the beam's vertical
-     * angle and the column's horizontal angle.
+     * **Pipeline**:
+     * 1. Enable DepthRenderer for the camera (lazy, one-time).
+     * 2. Render the scene to produce the depth texture.
+     * 3. Read the depth texture via `readPixels()`.
+     * 4. Flip vertically (WebGL readPixels is bottom-to-top).
+     * 5. Downsample via `IConvolutionProvider` → sector grid in meters.
+     *
+     * Note: this method is synchronous per the `ILidarNode` interface,
+     * so it uses the last rendered depth buffer. Call after the scene
+     * has rendered at least once. For async access with fresh render,
+     * use `scanAsync()`.
      */
     public scan(options: ILidarScanOptions): ILidarScanResult {
+        // Synchronous: return cached result (updated by onTick).
+        // The cached result already uses the latest scan parameters.
+        return this._cachedResult;
+    }
+
+    /**
+     * Async scan with fresh GPU depth buffer read.
+     *
+     * Use this when you need guaranteed fresh data (e.g., from MCP tools).
+     * For real-time simulation, `onTick()` handles the update cycle.
+     */
+    public async scanAsync(options: ILidarScanOptions): Promise<ILidarScanResult> {
         const beams: LidarBeams = options.beams ?? DEFAULTS.beams;
         const angularRes = options.angularResolution ?? DEFAULTS.angularResolution;
-        const encoding: LidarEncoding = options.encoding ?? DEFAULTS.encoding;
         const maxRange = options.maxRange ?? DEFAULTS.maxRange;
+        const encoding: LidarEncoding = options.encoding ?? "float32";
 
-        const columns = Math.floor(this._hFov / angularRes);
-        const totalSamples = beams * columns;
+        // Resolve the scene's length unit from the ISimSpace context.
+        // The depth buffer values are in scene units (whatever the camera
+        // near/far planes are set to). We need to know what unit that is
+        // to produce correctly labeled output.
+        const sceneUnit = this.space?.context?.units?.length ?? Length.Units.m;
 
-        // Allocate depth buffer.
-        const isUint16 = encoding === "uint16";
-        const buffer = isUint16 ? new Uint16Array(totalSamples) : new Float32Array(totalSamples);
+        // Compute grid dimensions from camera FOV and angular resolution
+        const engine = this._scene.getEngine();
+        const vFovRad = this._camera.fov;
+        const aspectRatio = engine.getAspectRatio(this._camera);
+        const hFovDeg = 2 * Math.atan(Math.tan(vFovRad / 2) * aspectRatio) * RAD_TO_DEG;
+        const columns = Math.max(1, Math.floor(hFovDeg / angularRes));
 
-        // Origin world transform.
-        const worldMatrix = this._origin.getWorldMatrix();
-        const originPos = Vector3.TransformCoordinates(Vector3.Zero(), worldMatrix);
+        // Read GPU depth buffer
+        const depthBuffer = await this._readDepthBuffer(columns, beams);
 
-        // Vertical angle range: centered around horizontal plane.
-        const vFovRad = (this._vFov * Math.PI) / 180;
-        const hStartRad = (-this._hFov / 2) * (Math.PI / 180);
+        // Downsample via convolution → Float32Array in scene units
+        const convConfig: IConvolutionConfig = {
+            cols: columns,
+            rows: beams,
+            pooling: this._pooling,
+            maxRange,
+        };
 
-        // Near/far planes (for metadata).
-        const nearPlane = 0.1;
-        const farPlane = maxRange;
+        const sceneUnitGrid = this._convolution.downsample(depthBuffer, convConfig);
 
-        for (let beam = 0; beam < beams; beam++) {
-            // Vertical angle: distribute beams evenly over vertical FOV.
-            const vAngle = -vFovRad / 2 + (beam / Math.max(beams - 1, 1)) * vFovRad;
-
-            for (let col = 0; col < columns; col++) {
-                // Horizontal angle.
-                const hAngle = hStartRad + (col * angularRes * Math.PI) / 180;
-
-                // Compute ray direction in local space, then transform to world.
-                const localDir = new Vector3(Math.sin(hAngle) * Math.cos(vAngle), Math.sin(vAngle), Math.cos(hAngle) * Math.cos(vAngle));
-
-                const worldDir = Vector3.TransformNormal(localDir, worldMatrix);
-                worldDir.normalize();
-
-                // Cast ray.
-                const ray = new Ray(originPos, worldDir, maxRange);
-                const hit = this._scene.pickWithRay(ray, this._pickPredicate);
-
-                let depth = 0; // 0 = no return (out of range / sky)
-                if (hit?.hit && hit.distance <= maxRange && hit.distance >= nearPlane) {
-                    depth = hit.distance;
-                }
-
-                // Encode depth value.
-                const idx = beam * columns + col;
-                if (isUint16) {
-                    // Millimeters, clamped to uint16 range.
-                    buffer[idx] = Math.min(Math.round(depth * 1000), 65535);
-                } else {
-                    buffer[idx] = depth;
-                }
-            }
-        }
-
-        // Base64-encode the typed array.
-        const bytes = new Uint8Array(buffer.buffer);
-        let binary = "";
-        for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        const data = btoa(binary);
+        // Convert to requested encoding, using the scene's length unit
+        const { data, unit } = this._encodeDepths(sceneUnitGrid, encoding, maxRange, sceneUnit);
 
         const metadata: ILidarScanMetadata = {
             beams,
             columns,
-            nearPlane,
-            farPlane,
-            hFov: this._hFov,
+            nearPlane: this._camera.minZ,
+            farPlane: this._camera.maxZ,
+            hFov: hFovDeg,
+            angularResolution: angularRes,
+            maxRange,
             encoding,
+            unit,
         };
 
         return { data, metadata };
     }
 
-    // -- ISimNode lifecycle --
+    // ── ISimNode lifecycle ───────────────────────────────────────────────
 
-    /** Auto-scan with default options each tick, cache result, emit event. */
-    public onTick(_dtMs: number): void {
+    /**
+     * Each tick: request an async depth buffer read.
+     * The result is cached for synchronous `sensorRead()` / `scan()` access.
+     */
+    protected override onSelfTick(_dtMs: number): void {
+        if (this._pendingScan) return; // don't stack async reads
+        this._pendingScan = true;
+
         const options: ILidarScanOptions = {
-            uri: this._origin.name,
+            uri: this._camera.name,
             ...this._scanDefaults,
         };
 
-        this._cachedResult = this.scan(options);
+        this.scanAsync(options).then((result) => {
+            this._cachedResult = result;
+            this._pendingScan = false;
 
-        // Emit to subscribers.
-        if (this._listeners.length > 0) {
-            const event: ILidarEvent = {
-                id: this.id,
-                series: [
-                    {
-                        measurement: { schema: "depth.lidar" },
-                        samples: [{ value: this._cachedResult, quality: 192 }],
-                    },
-                ],
-            };
-            for (const listener of this._listeners) {
-                listener(this, [event]);
+            // Emit to subscribers
+            if (this._listeners.length > 0) {
+                const event: ILidarEvent = {
+                    id: this.id,
+                    series: [
+                        {
+                            measurement: { schema: "depth.lidar" },
+                            samples: [{ value: result, quality: 192 }],
+                        },
+                    ],
+                };
+                for (const listener of this._listeners) {
+                    listener(this, [event]);
+                }
             }
-        }
+        });
     }
 
-    public onAdded(_space: ISimSpace): void {
-        // No initialization needed — scene and origin are set in constructor.
+    protected override onSelfAdded(_space: ISimSpace): void {
+        // Enable depth renderer lazily on first use
+        this._depthRenderer = this._scene.enableDepthRenderer(this._camera);
     }
 
-    public onRemoved(_space: ISimSpace): void {
+    protected override onSelfRemoved(_space: ISimSpace): void {
         this._listeners.length = 0;
+        this._depthRenderer = null;
     }
 
     public override dispose(): void {
         super.dispose();
         this._listeners.length = 0;
+        this._depthRenderer = null;
     }
 
-    // -- Private --
+    // ── Private ──────────────────────────────────────────────────────────
+
+    /**
+     * Read the GPU depth buffer, flip vertically, return as IDepthBuffer.
+     * Matches the pipeline from the MCP camera adapter's `_readLidarAsync`.
+     */
+    private async _readDepthBuffer(_requestedW: number, _requestedH: number): Promise<IDepthBuffer> {
+        if (!this._depthRenderer) {
+            this._depthRenderer = this._scene.enableDepthRenderer(this._camera);
+        }
+
+        // Ensure scene is rendered with latest camera state
+        this._scene.render();
+
+        const depthMap = this._depthRenderer.getDepthMap();
+        const rawDepth = await depthMap.readPixels();
+        if (!rawDepth) {
+            throw new Error("readPixels returned null for depth buffer");
+        }
+
+        const depthW = depthMap.getRenderWidth();
+        const depthH = depthMap.getRenderHeight();
+        const pixelCount = depthW * depthH;
+
+        // Extract single-channel depth from potentially multi-channel output
+        const rawArr = rawDepth instanceof Float32Array
+            ? rawDepth
+            : new Float32Array(rawDepth.buffer, rawDepth.byteOffset, rawDepth.byteLength / 4);
+
+        const stride = rawArr.length / pixelCount;
+        const depthBuffer = new Float32Array(pixelCount);
+
+        if (stride >= 4) {
+            for (let i = 0; i < pixelCount; i++) {
+                depthBuffer[i] = rawArr[i * stride];
+            }
+        } else {
+            depthBuffer.set(rawArr.subarray(0, pixelCount));
+        }
+
+        // Flip vertically (WebGL readPixels returns bottom-to-top)
+        const flipped = new Float32Array(pixelCount);
+        for (let y = 0; y < depthH; y++) {
+            flipped.set(
+                depthBuffer.subarray((depthH - 1 - y) * depthW, (depthH - y) * depthW),
+                y * depthW
+            );
+        }
+
+        return {
+            data: flipped,
+            width: depthW,
+            height: depthH,
+            near: this._camera.minZ,
+            far: this._camera.maxZ,
+        };
+    }
+
+    /**
+     * Convert depth values from scene units to hardware output format.
+     *
+     * The GPU depth buffer and convolution produce values in **scene units**
+     * (whatever `ISimSpace.context.units.length` is — could be m, cm, km).
+     * This method converts them to the fixed hardware conventions:
+     *
+     * - `"float32"`: scene units → **meters** as Float32Array.
+     *   Always meters, matching standard SI convention for LiDAR data.
+     *
+     * - `"uint16"`: scene units → **millimeters** as Uint16Array.
+     *   Matches real LiDAR hardware (Velodyne, SICK). Clamped to 0–65535.
+     *
+     * Both: out-of-range → 0 (no return).
+     *
+     * @param grid       Depth values in scene units.
+     * @param encoding   Requested output encoding.
+     * @param maxRange   Maximum range in scene units.
+     * @param sceneUnit  The scene's length Unit (from `space.context.units.length`).
+     */
+    private _encodeDepths(
+        grid: Float32Array,
+        encoding: LidarEncoding,
+        maxRange: number,
+        sceneUnit: Unit
+    ): { data: Float32Array | Uint16Array; unit: LidarUnit } {
+        // Precompute conversion factor only if scene unit differs from target.
+        // Common case (scene in meters): factor = 1, no conversion overhead.
+        const targetUnit = encoding === "uint16" ? Length.Units.mm : Length.Units.m;
+        const factor = sceneUnit === targetUnit ? 1 : Quantity.Convert(1, sceneUnit, targetUnit);
+        const needsConvert = factor !== 1;
+
+        if (encoding === "uint16") {
+            const u16 = new Uint16Array(grid.length);
+            for (let i = 0; i < grid.length; i++) {
+                const v = grid[i];
+                if (v <= 0 || v > maxRange) {
+                    u16[i] = 0;
+                } else {
+                    u16[i] = Math.min(Math.round(needsConvert ? v * factor : v), 65535);
+                }
+            }
+            return { data: u16, unit: "mm" };
+        }
+
+        const f32 = new Float32Array(grid.length);
+        if (needsConvert) {
+            for (let i = 0; i < grid.length; i++) {
+                const v = grid[i];
+                f32[i] = v <= 0 || v > maxRange ? 0 : v * factor;
+            }
+        } else {
+            for (let i = 0; i < grid.length; i++) {
+                const v = grid[i];
+                f32[i] = v <= 0 || v > maxRange ? 0 : v;
+            }
+        }
+        return { data: f32, unit: "m" };
+    }
 
     private _emptyMetadata(): ILidarScanMetadata {
         return {
@@ -241,8 +407,11 @@ export class BabylonLidarAdapter extends GraphNode implements ILidarNode {
             columns: 0,
             nearPlane: 0.1,
             farPlane: DEFAULTS.maxRange,
-            hFov: DEFAULTS.hFov,
-            encoding: DEFAULTS.encoding,
+            hFov: 0,
+            angularResolution: DEFAULTS.angularResolution,
+            maxRange: DEFAULTS.maxRange,
+            encoding: "float32",
+            unit: "m",
         };
     }
 }

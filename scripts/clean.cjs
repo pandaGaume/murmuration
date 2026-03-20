@@ -9,6 +9,8 @@ const dirs = [
     "packages/dev/core/bundle",
     "packages/dev/babylon/dist",
     "packages/dev/babylon/bundle",
+    "packages/dev/training/dist",
+    "packages/dev/training/bundle",
 ];
 
 for (const d of dirs) {

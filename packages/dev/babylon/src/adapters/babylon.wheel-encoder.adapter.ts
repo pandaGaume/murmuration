@@ -1,8 +1,8 @@
-import { GraphNode, IDisposable } from "@spiky-panda/core";
+import { IDisposable } from "@spiky-panda/core";
 import { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { ISensor, IWheelEncoderConfig, IWheelEncoderData, IWheelEncoderEvent, IWheelEncoderNode, WheelDirection } from "@dev/core/perception";
-import { ISimSpace } from "@dev/core/simulation";
+import { ISimSpace, SimTreeNode } from "@dev/core/simulation";
 import { generateId } from "@dev/core/utils";
 
 /**
@@ -52,7 +52,7 @@ export interface IBabylonWheelEncoderOptions {
  *
  * This matches the standard tire slip formula used in vehicle dynamics.
  */
-export class BabylonWheelEncoderAdapter extends GraphNode implements IWheelEncoderNode {
+export class BabylonWheelEncoderAdapter extends SimTreeNode implements IWheelEncoderNode {
     /** Static encoder configuration. */
     public config: IWheelEncoderConfig;
 
@@ -113,7 +113,7 @@ export class BabylonWheelEncoderAdapter extends GraphNode implements IWheelEncod
 
     // -- ISimNode lifecycle --
 
-    public onTick(dtMs: number): void {
+    protected override onSelfTick(dtMs: number): void {
         const dtSec = dtMs / 1000;
         if (dtSec <= 0) return;
 
@@ -180,11 +180,11 @@ export class BabylonWheelEncoderAdapter extends GraphNode implements IWheelEncod
         }
     }
 
-    public onAdded(_space: ISimSpace): void {
+    protected override onSelfAdded(_space: ISimSpace): void {
         this._prevAngle = null;
     }
 
-    public onRemoved(_space: ISimSpace): void {
+    protected override onSelfRemoved(_space: ISimSpace): void {
         this._listeners.length = 0;
     }
 

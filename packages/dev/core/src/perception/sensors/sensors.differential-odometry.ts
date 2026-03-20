@@ -1,5 +1,5 @@
-import { GraphNode, IDisposable } from "@spiky-panda/core";
-import { ISimSpace } from "@dev/core/simulation";
+import { IDisposable } from "@spiky-panda/core";
+import { ISimSpace, SimTreeNode } from "@dev/core/simulation";
 import { ISensor } from "./sensors.interfaces";
 import { generateId } from "@dev/core/utils";
 import { IDifferentialOdometryNode, IOdometryEstimate, IOdometryEvent, IWheelEncoderData, IWheelPosition } from "./sensors.wheel-encoder.interfaces";
@@ -95,7 +95,7 @@ interface SideAggregate {
  * - All wheels on the same side are coaxial (same effective track).
  * - The robot moves on a 2D plane (no pitch/roll compensation).
  */
-export class DifferentialOdometry extends GraphNode implements IDifferentialOdometryNode {
+export class DifferentialOdometry extends SimTreeNode implements IDifferentialOdometryNode {
     /** All enrolled wheels. */
     public wheels: IWheelPosition[];
 
@@ -199,7 +199,7 @@ export class DifferentialOdometry extends GraphNode implements IDifferentialOdom
      *   5. Determine reliability from aggregation results.
      *   6. Emit updated estimate to subscribers.
      */
-    public onTick(dtMs: number): void {
+    protected override onSelfTick(dtMs: number): void {
         if (this._leftWheels.length === 0 || this._rightWheels.length === 0) return;
 
         const dtSec = dtMs / 1000;
@@ -256,11 +256,11 @@ export class DifferentialOdometry extends GraphNode implements IDifferentialOdom
         }
     }
 
-    public onAdded(_space: ISimSpace): void {
+    protected override onSelfAdded(_space: ISimSpace): void {
         this._resolveWheels();
     }
 
-    public onRemoved(_space: ISimSpace): void {
+    protected override onSelfRemoved(_space: ISimSpace): void {
         this._listeners.length = 0;
     }
 

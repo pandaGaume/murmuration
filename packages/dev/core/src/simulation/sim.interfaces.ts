@@ -1,4 +1,5 @@
-import { IGraph, INode, IOlink } from "@spiky-panda/core";
+import { IGraph, IOlink } from "@spiky-panda/core";
+import { ISceneContext, ITreeNode } from "@dev/core/collections";
 
 /**
  * A node that participates in the discrete-time simulation loop.
@@ -19,10 +20,12 @@ import { IGraph, INode, IOlink } from "@spiky-panda/core";
  * 3. **`onRemoved(space, parent?)`** — called once when the node is
  *    detached from the graph. Clean up subscriptions, release resources.
  *
- * @extends INode  Inherits identity and graph connectivity from the
- *                 core graph library.
+ * @extends ITreeNode  Inherits parent-child hierarchy, identity, and
+ *                     graph connectivity from the tree/graph library.
+ *                     Lifecycle calls (onTick, onAdded, onRemoved)
+ *                     propagate automatically down the tree.
  */
-export interface ISimNode extends INode {
+export interface ISimNode extends ITreeNode {
     /**
      * Per-frame update callback.
      * @param dtMs  Delta time in milliseconds since the last tick.
@@ -48,16 +51,33 @@ export interface ISimNode extends INode {
 }
 
 /**
- * The simulation graph — a directed graph of `ISimNode` entities
- * connected by `IOlink` edges.
+ * The simulation space — the root container and scene.
  *
- * The space owns the tick loop and is responsible for calling
- * `onTick(dtMs)` on every enrolled node each frame. Nodes can be
- * added or removed at any time; the space fires `onAdded` / `onRemoved`
- * accordingly.
+ * The space IS the scene: it owns the tree of `ISimNode` entities,
+ * holds the `ISceneContext` (units, coordinate frame, gravity), and
+ * drives the tick loop. It also decorates an `IGraph<ISimNode, IOlink>`
+ * for flat graph connectivity (data flow edges between nodes).
+ *
+ * Nodes access the scene context via the space reference they receive
+ * in `onAdded(space)`:
+ *
+ * ```typescript
+ * protected onSelfAdded(space: ISimSpace): void {
+ *     const lengthUnit = space.context.units.length; // e.g., Length.Units.m
+ * }
+ * ```
  *
  * @extends IGraph<ISimNode, IOlink>  Inherits node/edge CRUD, traversal,
  *                                     and topology queries from the core
  *                                     graph library.
  */
-export interface ISimSpace extends IGraph<ISimNode, IOlink> {}
+export interface ISimSpace extends IGraph<ISimNode, IOlink> {
+    /**
+     * Global scene context: physical units, coordinate frame, gravity.
+     *
+     * Every node in the space can read this to know what units the
+     * scene operates in, enabling correct unit conversion for sensor
+     * data, physics, and navigation.
+     */
+    readonly context: ISceneContext;
+}
