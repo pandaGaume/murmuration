@@ -3,21 +3,1120 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TITLE — Murmuration</title>
+    <title>LiDAR Depth Scan — Murmuration</title>
     <link rel="stylesheet" href="../style.css">
+    <style>
+        .sample-layout {
+            display: flex;
+            gap: 1rem;
+            height: calc(100vh - 56px);
+            padding: 1rem;
+        }
+        .scene-panel {
+            flex: 1;
+            position: relative;
+            min-width: 0;
+        }
+        .side-panel {
+            width: 360px;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            overflow-y: auto;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            outline: none;
+        }
+        .panel-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .panel-box h3 {
+            font-size: 0.9rem;
+            color: var(--accent);
+            margin-bottom: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        #lidarCanvas {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 8px;
+            background: #000;
+        }
+        .feature-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.4rem;
+            font-size: 0.8rem;
+        }
+        .feature-bar .label {
+            width: 130px;
+            color: var(--text-muted);
+            font-family: var(--mono);
+            flex-shrink: 0;
+        }
+        .feature-bar .track {
+            flex: 1;
+            height: 10px;
+            background: var(--bg);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .feature-bar .fill {
+            height: 100%;
+            border-radius: 5px;
+            transition: width 0.1s;
+        }
+        .feature-bar .value {
+            width: 40px;
+            text-align: right;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+        }
+        .controls label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+        .controls select, .controls input[type="range"] {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.3rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .info-line {
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+        @media (max-width: 900px) {
+            .sample-layout { flex-direction: column; height: auto; }
+            .scene-panel { height: 50vh; }
+            .side-panel { width: 100%; }
+        }
+    </style>
 </head>
 <body>
-    <nav style="padding:1rem 2rem;border-bottom:1px solid var(--border)">
+    <nav style="padding:0.75rem 2rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:1rem">
         <a href="../index.html">&larr; Back</a>
+        <span style="color:var(--text-muted);font-size:0.9rem">LiDAR Depth Scan</span>
     </nav>
-    <section class="section">
-        <h2>TITLE</h2>
-        <p style="color:var(--text-muted)">Sample not yet implemented. Libraries are loaded — open the console to interact.</p>
-        <canvas id="renderCanvas" style="width:100%;height:60vh;border:1px solid var(--border);border-radius:8px;margin-top:1rem"></canvas>
-    </section>
-    <script src="../lib/spiky-panda-ext.js"></script>
-    <script src="../lib/murmuration-core.js"></script>
-    <script src="../lib/murmuration-babylon.js"></script>
-    <script src="../lib/murmuration-training.js"></script>
+
+    <div class="sample-layout">
+        <!-- 3D Scene -->
+        <div class="scene-panel">
+            <canvas id="renderCanvas"></canvas>
+        </div>
+
+        <!-- Side panel -->
+        <div class="side-panel">
+            <!-- LiDAR polar view -->
+            <div class="panel-box">
+                <h3>LiDAR Scan (Top-Down)</h3>
+                <canvas id="lidarCanvas" width="340" height="340"></canvas>
+                <div class="info-line" id="sectorInfo">36 cols &times; 16 beams = 576 rays | Range: 100m | vFOV: &pm;15&deg;</div>
+            </div>
+
+            <!-- Percept features -->
+            <div class="panel-box">
+                <h3>Percept Features</h3>
+                <div id="featureBars"></div>
+            </div>
+
+            <!-- Controls -->
+            <div class="panel-box">
+                <h3>Controls</h3>
+                <div class="controls">
+                    <label>
+                        Sectors
+                        <select id="ctrlSectors">
+                            <option value="18">18</option>
+                            <option value="36" selected>36</option>
+                            <option value="72">72</option>
+                        </select>
+                    </label>
+                    <label>
+                        Beams
+                        <select id="ctrlBeams">
+                            <option value="4">4</option>
+                            <option value="8">8</option>
+                            <option value="16" selected>16</option>
+                            <option value="32">32</option>
+                        </select>
+                    </label>
+                    <label>
+                        Max Range (m)
+                        <input type="range" id="ctrlRange" min="20" max="200" value="100" step="10">
+                    </label>
+                    <label>
+                        Encoding
+                        <select id="ctrlEncoding">
+                            <option value="float32" selected>float32 (meters)</option>
+                            <option value="uint16">uint16 (mm)</option>
+                        </select>
+                    </label>
+                    <label>
+                        Scene
+                        <select id="ctrlScene">
+                            <option value="mars" selected>Mars Canyon</option>
+                            <option value="crater">Crater Field</option>
+                            <option value="boulders">Boulder Garden</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="info-line" style="margin-top:0.5rem">WASD move | Mouse look | F toggle fly mode | Shift = fast</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Babylon.js CDN -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+
+    <script>
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LiDAR Scan Sample — Mars terrain with real-time depth sector extraction
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    (function () {
+        "use strict";
+
+        // ── Config ────────────────────────────────────────────────────────────
+        const ROVER_CAMERA_HEIGHT = 1.8; // meters above ground (mast cam height)
+
+        const CONFIG = {
+            sectorCount: 36,
+            beams: 16,          // vertical beam count (16/32/64/128)
+            maxRange: 100,
+            hFov: 360,          // full horizontal sweep
+            vFov: 30,           // vertical FOV in degrees (typical: ±15°)
+            encoding: "float32",
+            terrainSize: 256,
+            terrainSubdivisions: 128,
+            rockCount: 80,
+            canyonDepth: 8,
+        };
+
+        // ── Percept feature definitions ───────────────────────────────────────
+        const FEATURES = [
+            { key: "frontProximity",  label: "Front Obstacle", color: "#ff4444", min: 0, max: 1 },
+            { key: "frontBearing",    label: "Front Bearing",  color: "#ff8844", min: -1, max: 1 },
+            { key: "leftClearance",   label: "Left Clearance", color: "#44aaff", min: 0, max: 1 },
+            { key: "rightClearance",  label: "Right Clearance",color: "#44aaff", min: 0, max: 1 },
+            { key: "closingRate",     label: "Closing Rate",   color: "#ffaa00", min: -1, max: 1 },
+            { key: "corridorDir",     label: "Corridor Dir",   color: "#44ff88", min: -1, max: 1 },
+            { key: "roughness",       label: "Roughness",      color: "#aa44ff", min: 0, max: 1 },
+            { key: "confidence",      label: "Confidence",     color: "#ffffff", min: 0, max: 1 },
+        ];
+
+        // ── DOM refs ──────────────────────────────────────────────────────────
+        const renderCanvas = document.getElementById("renderCanvas");
+        const lidarCanvas  = document.getElementById("lidarCanvas");
+        const lidarCtx     = lidarCanvas.getContext("2d");
+        const featureBarsEl = document.getElementById("featureBars");
+        const sectorInfoEl  = document.getElementById("sectorInfo");
+
+        // ── Build feature bar DOM ─────────────────────────────────────────────
+        const featureEls = {};
+        FEATURES.forEach(f => {
+            const div = document.createElement("div");
+            div.className = "feature-bar";
+            div.innerHTML = `
+                <span class="label">${f.label}</span>
+                <div class="track"><div class="fill" style="background:${f.color};width:0%"></div></div>
+                <span class="value">0.00</span>`;
+            featureBarsEl.appendChild(div);
+            featureEls[f.key] = {
+                fill: div.querySelector(".fill"),
+                value: div.querySelector(".value")
+            };
+        });
+
+        // ── Babylon Engine ────────────────────────────────────────────────────
+        // Canvas MUST have tabIndex to receive keyboard events for WASD
+        renderCanvas.tabIndex = 1;
+        renderCanvas.style.outline = "none";
+        renderCanvas.focus();
+
+        const engine = new BABYLON.Engine(renderCanvas, true, { stencil: true });
+        let scene, camera;
+        let sectors = new Float32Array(CONFIG.sectorCount);
+        let currentHeightmap = null;  // stored for ground-height sampling
+        let currentTerrainSize = 0;
+        let currentSubdivisions = 0;
+
+        /**
+         * Sample terrain height at world position (wx, wz).
+         * Uses bilinear interpolation on the heightmap.
+         */
+        function sampleTerrainHeight(wx, wz) {
+            if (!currentHeightmap) return 0;
+            const size = currentTerrainSize;
+            const sub = currentSubdivisions;
+            // World coords → normalized [0,1]
+            const nx = (wx / size + 0.5);
+            const nz = (wz / size + 0.5);
+            // Clamp to heightmap bounds
+            const fx = Math.max(0, Math.min(sub - 1.001, nx * sub));
+            const fz = Math.max(0, Math.min(sub - 1.001, nz * sub));
+            const ix = Math.floor(fx), iz = Math.floor(fz);
+            const dx = fx - ix, dz = fz - iz;
+            const stride = sub + 1;
+            // Bilinear interpolation
+            const h00 = currentHeightmap[iz * stride + ix] || 0;
+            const h10 = currentHeightmap[iz * stride + ix + 1] || 0;
+            const h01 = currentHeightmap[(iz + 1) * stride + ix] || 0;
+            const h11 = currentHeightmap[(iz + 1) * stride + ix + 1] || 0;
+            return h00 * (1 - dx) * (1 - dz) + h10 * dx * (1 - dz) +
+                   h01 * (1 - dx) * dz + h11 * dx * dz;
+        }
+
+        // ── Manual WASD keyboard movement ────────────────────────────────────
+        // Babylon's built-in FreeCameraKeyboardMoveInput can fail silently
+        // when the canvas doesn't receive keyboard events. We listen on
+        // `document` directly which always works.
+        const MOVE_SPEED = 0.3;  // meters per frame (~rover walking speed)
+        const keysDown = new Set();
+
+        document.addEventListener("keydown", (e) => {
+            keysDown.add(e.code);
+            // Prevent page scroll on WASD/QE/arrows
+            if (["KeyW","KeyA","KeyS","KeyD","KeyQ","KeyE","KeyF","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) {
+                e.preventDefault();
+            }
+            // F = toggle free fly / ground lock
+            if (e.code === "KeyF") {
+                freeFlying = !freeFlying;
+                console.log("[Murmuration] " + (freeFlying ? "Free fly mode" : "Ground-locked mode"));
+            }
+        });
+        document.addEventListener("keyup", (e) => keysDown.delete(e.code));
+
+        let freeFlying = false; // Toggle with F key
+
+        function applyManualMovement() {
+            if (!camera) return;
+            const speed = keysDown.has("ShiftLeft") || keysDown.has("ShiftRight") ? MOVE_SPEED * 3 : MOVE_SPEED;
+
+            // Movement on XZ plane only (rover can't fly)
+            // Use camera direction projected onto horizontal plane
+            const forward3D = camera.getDirection(BABYLON.Vector3.Forward());
+            const forward = new BABYLON.Vector3(forward3D.x, 0, forward3D.z).normalize();
+            const right3D = camera.getDirection(BABYLON.Vector3.Right());
+            const right = new BABYLON.Vector3(right3D.x, 0, right3D.z).normalize();
+
+            if (keysDown.has("KeyW") || keysDown.has("ArrowUp")) {
+                camera.position.addInPlace(forward.scale(speed));
+            }
+            if (keysDown.has("KeyS") || keysDown.has("ArrowDown")) {
+                camera.position.addInPlace(forward.scale(-speed));
+            }
+            if (keysDown.has("KeyA") || keysDown.has("ArrowLeft")) {
+                camera.position.addInPlace(right.scale(-speed));
+            }
+            if (keysDown.has("KeyD") || keysDown.has("ArrowRight")) {
+                camera.position.addInPlace(right.scale(speed));
+            }
+
+            if (freeFlying) {
+                // Free fly mode (for debugging)
+                if (keysDown.has("KeyE")) camera.position.y += speed;
+                if (keysDown.has("KeyQ")) camera.position.y -= speed;
+            } else if (scene) {
+                // Lock camera to terrain using a downward raycast.
+                // This is the most reliable method — works with the actual
+                // rendered mesh, not the heightmap approximation.
+                const downRay = new BABYLON.Ray(
+                    new BABYLON.Vector3(camera.position.x, camera.position.y + 50, camera.position.z),
+                    BABYLON.Vector3.Down(),
+                    200
+                );
+                const groundHit = scene.pickWithRay(downRay, (mesh) => mesh.name === "terrain");
+                if (groundHit && groundHit.hit && groundHit.pickedPoint) {
+                    const targetY = groundHit.pickedPoint.y + ROVER_CAMERA_HEIGHT;
+                    // Snap up instantly, smooth down
+                    if (targetY > camera.position.y) {
+                        camera.position.y = targetY;
+                    } else {
+                        camera.position.y = camera.position.y * 0.6 + targetY * 0.4;
+                    }
+                }
+            }
+        }
+
+        // ── Seeded random for reproducible terrain ────────────────────────────
+        function seededRandom(seed) {
+            let s = seed;
+            return function () {
+                s = (s * 16807 + 0) % 2147483647;
+                return (s - 1) / 2147483646;
+            };
+        }
+
+        // ── Perlin-like noise (2D, simple) ────────────────────────────────────
+        function createNoiseGenerator(seed) {
+            const rng = seededRandom(seed);
+            const perm = new Uint8Array(512);
+            for (let i = 0; i < 256; i++) perm[i] = i;
+            for (let i = 255; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [perm[i], perm[j]] = [perm[j], perm[i]];
+            }
+            for (let i = 0; i < 256; i++) perm[i + 256] = perm[i];
+
+            function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+            function lerp(a, b, t) { return a + t * (b - a); }
+            function grad(hash, x, y) {
+                const h = hash & 3;
+                const u = h < 2 ? x : y;
+                const v = h < 2 ? y : x;
+                return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+            }
+
+            return function noise(x, y) {
+                const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+                const xf = x - Math.floor(x), yf = y - Math.floor(y);
+                const u = fade(xf), v = fade(yf);
+                const aa = perm[perm[xi] + yi], ab = perm[perm[xi] + yi + 1];
+                const ba = perm[perm[xi + 1] + yi], bb = perm[perm[xi + 1] + yi + 1];
+                return lerp(
+                    lerp(grad(aa, xf, yf), grad(ba, xf - 1, yf), u),
+                    lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u),
+                    v
+                );
+            };
+        }
+
+        // ── Terrain heightmap generation ──────────────────────────────────────
+        function generateHeightmap(type, size) {
+            const noise = createNoiseGenerator(42);
+            const noise2 = createNoiseGenerator(137);
+            const map = new Float32Array(size * size);
+
+            for (let z = 0; z < size; z++) {
+                for (let x = 0; x < size; x++) {
+                    const nx = x / size, nz = z / size;
+                    let h = 0;
+
+                    // Rover-scale terrain: gentle slopes with rocky detail.
+                    // Heights in meters — rover camera is ~1.8m above ground.
+                    // A 2m rock is a serious obstacle. A 5m ridge is a major feature.
+
+                    // Large-scale terrain: gentle hills and slopes (0-8m elevation)
+                    h += noise(nx * 3, nz * 3) * 3.0;
+                    h += noise(nx * 6, nz * 6) * 1.5;
+
+                    // Medium rocky undulation (0.5-1.5m)
+                    h += noise(nx * 15, nz * 15) * 0.8;
+                    h += noise2(nx * 25, nz * 25) * 0.4;
+
+                    // Fine surface roughness — gravel, small stones (5-20cm)
+                    h += noise(nx * 60, nz * 60) * 0.15;
+                    h += noise2(nx * 120, nz * 120) * 0.06;
+
+                    // Scattered embedded rocks (0.3-1.2m protrusions)
+                    const rockNoise = noise2(nx * 40, nz * 40);
+                    if (rockNoise > 0.25) {
+                        const rockH = (rockNoise - 0.25);
+                        h += rockH * rockH * 8.0; // quadratic = sharp peaks
+                    }
+
+                    // Shallow ruts and depressions (10-40cm)
+                    const rutNoise = noise(nx * 50, nz * 50 + 77);
+                    if (rutNoise < -0.3) {
+                        h += (rutNoise + 0.3) * 1.5;
+                    }
+
+                    // Occasional bedrock ledges (30-60cm steps)
+                    const ledgeScale = 0.5;
+                    const ledgeH = noise(nx * 8, nz * 8) * 4.0;
+                    h += (Math.round(ledgeH / ledgeScale) * ledgeScale - ledgeH) * 0.15;
+
+                    if (type === "mars" || type === "canyon") {
+                        // Canyon carving — a winding valley along the center
+                        const centerX = 0.5 + 0.15 * Math.sin(nz * Math.PI * 3);
+                        const dist = Math.abs(nx - centerX);
+                        const canyonWidth = 0.08 + 0.03 * noise(nz * 6, 0);
+                        if (dist < canyonWidth) {
+                            const depth = 1 - (dist / canyonWidth);
+                            h -= depth * depth * CONFIG.canyonDepth;
+                        }
+                        // Canyon walls — sharp ridges on edges
+                        if (dist > canyonWidth && dist < canyonWidth + 0.04) {
+                            h += (1 - (dist - canyonWidth) / 0.04) * 3;
+                        }
+                    }
+
+                    if (type === "crater") {
+                        // Stamp some craters
+                        const craters = [
+                            { cx: 0.3, cz: 0.3, r: 0.12, d: 6 },
+                            { cx: 0.7, cz: 0.5, r: 0.08, d: 4 },
+                            { cx: 0.5, cz: 0.8, r: 0.15, d: 8 },
+                            { cx: 0.2, cz: 0.7, r: 0.06, d: 3 },
+                            { cx: 0.8, cz: 0.2, r: 0.10, d: 5 },
+                        ];
+                        for (const c of craters) {
+                            const dx = nx - c.cx, dz = nz - c.cz;
+                            const dist = Math.sqrt(dx * dx + dz * dz);
+                            if (dist < c.r) {
+                                const t = dist / c.r;
+                                // Bowl shape with rim
+                                h -= (1 - t * t) * c.d;
+                                if (t > 0.8) h += (t - 0.8) / 0.2 * c.d * 0.3;
+                            }
+                        }
+                    }
+
+                    map[z * size + x] = h;
+                }
+            }
+            return map;
+        }
+
+        // ── Scene builder ─────────────────────────────────────────────────────
+        function buildScene(type) {
+            if (scene) scene.dispose();
+            scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color4(0.02, 0.01, 0.03, 1);
+            scene.ambientColor = new BABYLON.Color3(0.15, 0.08, 0.05);
+            scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+            scene.fogDensity = 0.008; // dusty Mars atmosphere at ground level
+            scene.fogColor = new BABYLON.Color3(0.12, 0.06, 0.04);
+
+            // Camera — UniversalCamera with manual WASD
+            // Position is temporary; corrected after heightmap is stored below.
+            camera = new BABYLON.UniversalCamera("cam",
+                new BABYLON.Vector3(0, 10, -20), scene);
+            camera.minZ = 0.5;
+            camera.maxZ = CONFIG.maxRange * 1.5;
+            camera.angularSensibility = 2000;
+
+            // Detach Babylon's default keyboard input — we handle it ourselves
+            camera.inputs.removeByType("FreeCameraKeyboardMoveInput");
+
+            // Attach only mouse/pointer input for look-around
+            camera.attachControl(renderCanvas, true);
+
+            camera.applyGravity = false;
+            camera.checkCollisions = false;
+
+            // Sun light — harsh directional
+            const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.5, -1, 0.3), scene);
+            sun.intensity = 1.8;
+            sun.diffuse = new BABYLON.Color3(1.0, 0.85, 0.7);
+
+            // Fill light — bluish ambient from sky
+            const fill = new BABYLON.HemisphericLight("fill", new BABYLON.Vector3(0, 1, 0), scene);
+            fill.intensity = 0.3;
+            fill.diffuse = new BABYLON.Color3(0.6, 0.65, 0.8);
+            fill.groundColor = new BABYLON.Color3(0.2, 0.1, 0.05);
+
+            // Mars ground material
+            const groundMat = new BABYLON.StandardMaterial("ground", scene);
+            groundMat.diffuseColor = new BABYLON.Color3(0.6, 0.3, 0.15);
+            groundMat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+            groundMat.ambientColor = new BABYLON.Color3(0.3, 0.15, 0.08);
+
+            // Terrain from heightmap
+            const subdivisions = CONFIG.terrainSubdivisions;
+            const terrainSize = CONFIG.terrainSize;
+            const heightmap = generateHeightmap(type, subdivisions + 1);
+
+            // Store for camera ground tracking
+            currentHeightmap = heightmap;
+            currentTerrainSize = terrainSize;
+            currentSubdivisions = subdivisions;
+
+            // Now place camera at correct ground height
+            if (camera) {
+                const groundH = sampleTerrainHeight(camera.position.x, camera.position.z);
+                camera.position.y = groundH + ROVER_CAMERA_HEIGHT;
+            }
+
+            const ground = BABYLON.MeshBuilder.CreateGround("terrain", {
+                width: terrainSize,
+                height: terrainSize,
+                subdivisions: subdivisions,
+                updatable: false
+            }, scene);
+            ground.material = groundMat;
+
+            // Apply heightmap to vertices
+            const positions = ground.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+            for (let i = 0; i < positions.length / 3; i++) {
+                positions[i * 3 + 1] = heightmap[i] || 0;
+            }
+            ground.updateVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+            ground.createNormals(true);
+
+            // Rock material
+            const rockMat = new BABYLON.StandardMaterial("rock", scene);
+            rockMat.diffuseColor = new BABYLON.Color3(0.45, 0.25, 0.15);
+            rockMat.specularColor = new BABYLON.Color3(0.02, 0.02, 0.02);
+
+            // Dark rock variant
+            const darkRockMat = new BABYLON.StandardMaterial("darkRock", scene);
+            darkRockMat.diffuseColor = new BABYLON.Color3(0.25, 0.15, 0.1);
+            darkRockMat.specularColor = new BABYLON.Color3(0.01, 0.01, 0.01);
+
+            // Scatter rocks
+            const rng = seededRandom(99);
+            const rockCount = type === "boulders" ? 150 : CONFIG.rockCount;
+            for (let i = 0; i < rockCount; i++) {
+                const rx = (rng() - 0.5) * terrainSize * 0.9;
+                const rz = (rng() - 0.5) * terrainSize * 0.9;
+                const scale = 0.2 + rng() * 1.8; // 0.2m to 2m (rover scale)
+                const heightScale = 0.4 + rng() * 0.8;
+
+                // Sample terrain height at rock position
+                const nx = (rx / terrainSize + 0.5);
+                const nz = (rz / terrainSize + 0.5);
+                const ix = Math.floor(nx * subdivisions);
+                const iz = Math.floor(nz * subdivisions);
+                const idx = iz * (subdivisions + 1) + ix;
+                const terrainH = heightmap[idx] || 0;
+
+                // Irregular rock shape — deformed sphere
+                const rock = BABYLON.MeshBuilder.CreateSphere("rock" + i, {
+                    diameter: scale,
+                    segments: 6
+                }, scene);
+
+                // Deform vertices for organic look
+                const rockPos = rock.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+                for (let v = 0; v < rockPos.length / 3; v++) {
+                    const deform = 0.7 + rng() * 0.6;
+                    rockPos[v * 3] *= deform;
+                    rockPos[v * 3 + 1] *= deform * heightScale;
+                    rockPos[v * 3 + 2] *= deform;
+                }
+                rock.updateVerticesData(BABYLON.VertexBuffer.PositionKind, rockPos);
+                rock.createNormals(true);
+
+                rock.position.set(rx, terrainH + scale * heightScale * 0.3, rz);
+                rock.rotation.y = rng() * Math.PI * 2;
+                rock.material = rng() > 0.3 ? rockMat : darkRockMat;
+            }
+
+            // Add some tall pillars/mesas for the canyon scene
+            if (type === "mars") {
+                const pillarMat = new BABYLON.StandardMaterial("pillar", scene);
+                pillarMat.diffuseColor = new BABYLON.Color3(0.5, 0.28, 0.15);
+                for (let i = 0; i < 8; i++) {
+                    const px = (rng() - 0.5) * terrainSize * 0.6;
+                    const pz = (rng() - 0.5) * terrainSize * 0.6;
+                    const w = 2 + rng() * 4;   // 2-6m wide rock formations
+                    const h = 3 + rng() * 6;   // 3-9m tall (visible from rover POV)
+
+                    const nx2 = (px / terrainSize + 0.5);
+                    const nz2 = (pz / terrainSize + 0.5);
+                    const ix2 = Math.floor(nx2 * subdivisions);
+                    const iz2 = Math.floor(nz2 * subdivisions);
+                    const tH = heightmap[iz2 * (subdivisions + 1) + ix2] || 0;
+
+                    const pillar = BABYLON.MeshBuilder.CreateCylinder("pillar" + i, {
+                        diameter: w,
+                        height: h,
+                        tessellation: 8
+                    }, scene);
+                    pillar.position.set(px, tH + h / 2, pz);
+                    pillar.material = pillarMat;
+                }
+            }
+
+            // Skybox — simple gradient
+            const skyMat = new BABYLON.StandardMaterial("sky", scene);
+            skyMat.backFaceCulling = false;
+            skyMat.emissiveColor = new BABYLON.Color3(0.02, 0.01, 0.03);
+            skyMat.disableLighting = true;
+            const skybox = BABYLON.MeshBuilder.CreateBox("skybox", { size: 500 }, scene);
+            skybox.material = skyMat;
+            skybox.infiniteDistance = true;
+
+            return scene;
+        }
+
+        // ── Multi-beam LiDAR raycasting ─────────────────────────────────────
+        // Casts a full grid of rays: `beams` vertical rows × `sectorCount` columns.
+        //
+        // Hit classification: OBSTACLE vs GROUND
+        // Strategy: use hit point world position to check if the hit rises
+        // above the local terrain surface. We sample the heightmap at the
+        // hit's XZ position — if hitY > terrainY + obstacleThreshold, it's
+        // an obstacle (rock, wall, pillar). Otherwise it's ground.
+        //
+        // This works on slopes because we compare against the ACTUAL terrain
+        // height at the hit location, not an assumed flat plane.
+        //
+        // Limitation: this uses the heightmap (ground truth) which is only
+        // available in simulation. In production, the CNN would learn this
+        // classification from the beamGrid tensor alone.
+        //
+        // Returns:
+        //   sectors[]       — minimum OBSTACLE depth per column
+        //   beamGrid[][]    — full [beam][column] depth grid (all hits)
+        //   groundProfile[] — Y of ground hits per column (for roughness)
+        let lastCameraYaw = 0;
+
+        // An object must rise this much above local terrain to be an obstacle.
+        // Below this = terrain roughness (gravel, bumps, ruts).
+        // Above this = navigable obstacle (rock, boulder, wall).
+        const OBSTACLE_HEIGHT_THRESHOLD = 0.4; // meters above local ground
+
+        // Preallocate grids (resized when config changes)
+        let beamGrid = [];      // [beam][column] = depth
+        let groundProfile = []; // [column] = ground hit Y coordinate
+
+        function castDepthSectors(sectorCount, maxRange) {
+            const beams = CONFIG.beams;
+            const vFovRad = (CONFIG.vFov * Math.PI) / 180;
+            const results = new Float32Array(sectorCount);
+            const origin = camera.position.clone();
+
+            // Get camera direction for yaw + pitch
+            const forward = camera.getDirection(BABYLON.Vector3.Forward());
+            lastCameraYaw = Math.atan2(forward.x, forward.z);
+            const cameraPitch = Math.asin(Math.max(-1, Math.min(1, forward.y)));
+
+            // Resize grids if needed
+            if (beamGrid.length !== beams) {
+                beamGrid = new Array(beams);
+                for (let b = 0; b < beams; b++) beamGrid[b] = new Float32Array(sectorCount);
+            }
+            if (groundProfile.length !== sectorCount) {
+                groundProfile = new Float32Array(sectorCount);
+            }
+
+            const meshFilter = (mesh) => mesh.name !== "skybox";
+
+            // Vertical beam angles: spread from +vFov/2 (top) to -vFov/2 (bottom)
+            const beamPitches = new Float32Array(beams);
+            for (let b = 0; b < beams; b++) {
+                const t = beams > 1 ? b / (beams - 1) : 0.5;
+                beamPitches[b] = cameraPitch + vFovRad / 2 - t * vFovRad;
+            }
+
+            for (let col = 0; col < sectorCount; col++) {
+                const sectorAngle = (col / sectorCount) * Math.PI * 2;
+                const worldYaw = lastCameraYaw + sectorAngle;
+                const sinYaw = Math.sin(worldYaw);
+                const cosYaw = Math.cos(worldYaw);
+
+                let minObstacleDepth = maxRange;
+                let lowestGroundY = null;
+
+                for (let b = 0; b < beams; b++) {
+                    const pitch = beamPitches[b];
+                    const cosPitch = Math.cos(pitch);
+                    const sinPitch = Math.sin(pitch);
+
+                    const dir = new BABYLON.Vector3(
+                        sinYaw * cosPitch,
+                        sinPitch,
+                        cosYaw * cosPitch
+                    );
+
+                    const ray = new BABYLON.Ray(origin, dir, maxRange);
+                    const hit = scene.pickWithRay(ray, meshFilter);
+
+                    let depth = maxRange;
+                    if (hit && hit.hit && hit.distance < maxRange && hit.pickedPoint) {
+                        depth = hit.distance;
+                        const hitMeshName = hit.pickedMesh ? hit.pickedMesh.name : "";
+                        const hitY = hit.pickedPoint.y;
+
+                        if (hitMeshName === "terrain") {
+                            // ── GROUND ──
+                            // Direct hit on the terrain mesh → always ground
+                            if (lowestGroundY === null || hitY < lowestGroundY) {
+                                lowestGroundY = hitY;
+                            }
+                        } else {
+                            // ── OBSTACLE ──
+                            // Hit something that is NOT the terrain mesh
+                            // (rock, pillar, wall, etc.)
+                            if (depth < minObstacleDepth) {
+                                minObstacleDepth = depth;
+                            }
+                        }
+                    }
+
+                    beamGrid[b][col] = depth;
+                }
+
+                results[col] = minObstacleDepth;
+                groundProfile[col] = lowestGroundY !== null ? lowestGroundY : 0;
+            }
+
+            return results;
+        }
+
+        // ── Percept feature computation (ground truth) ────────────────────────
+        function computePerceptFeatures(sectors, maxRange) {
+            const n = sectors.length;
+
+            // Navigation-relevant distance: obstacles beyond this contribute
+            // less to proximity/bearing. Closer obstacles weigh more.
+            const NAV_RANGE = 50; // meters — obstacle relevance horizon
+
+            // Sector indices (0 = forward, wrapping around)
+            const frontSectors = [];
+            const leftSectors = [];
+            const rightSectors = [];
+            for (let i = 0; i < n; i++) {
+                const angle = (i / n) * 360;
+                if (angle < 30 || angle > 330) frontSectors.push(i);
+                else if (angle >= 60 && angle < 150) rightSectors.push(i);
+                else if (angle >= 210 && angle < 300) leftSectors.push(i);
+            }
+
+            // Helper: is this sector an actual obstacle hit?
+            // sectors[i] = maxRange means no obstacle was hit in that column.
+            const isHit = (i) => sectors[i] < maxRange - 1;
+
+            // 0: Front obstacle proximity
+            // 0 = clear ahead (no obstacle within NAV_RANGE)
+            // 1 = obstacle at contact distance
+            // Uses inverse-square falloff: nearby obstacles dominate
+            let minFront = NAV_RANGE;
+            for (const i of frontSectors) {
+                if (isHit(i) && sectors[i] < minFront) { minFront = sectors[i]; }
+            }
+            let frontProximity = 0;
+            if (minFront < NAV_RANGE) {
+                // Inverse falloff: 1m→0.98, 5m→0.90, 10m→0.80, 25m→0.50, 50m→0
+                frontProximity = Math.pow(1 - minFront / NAV_RANGE, 0.5);
+            }
+
+            // 1: Front obstacle bearing — only considers obstacles within NAV_RANGE
+            let bearingSum = 0, bearingWeight = 0;
+            for (const i of frontSectors) {
+                if (isHit(i) && sectors[i] < NAV_RANGE) {
+                    // Angular position: sector 0 = 0°, wraps at 360°
+                    let sectorAngle = (i / n) * 360;
+                    if (sectorAngle > 180) sectorAngle -= 360; // [-180, 180]
+                    const normalized = sectorAngle / 30; // front arc is ±30° → [-1, +1]
+                    const w = 1 - sectors[i] / NAV_RANGE; // closer = stronger weight
+                    bearingSum += normalized * w;
+                    bearingWeight += w;
+                }
+            }
+            const frontBearing = bearingWeight > 0 ? Math.max(-1, Math.min(1, bearingSum / bearingWeight)) : 0;
+
+            // 2: Left clearance — uses NAV_RANGE (how free is space to navigate into)
+            let leftHits = 0, leftObstacleSum = 0;
+            for (const i of leftSectors) {
+                if (isHit(i) && sectors[i] < NAV_RANGE) {
+                    leftObstacleSum += sectors[i];
+                    leftHits++;
+                }
+            }
+            const leftClearance = leftHits > 0
+                ? Math.min(1, (leftObstacleSum / leftHits) / NAV_RANGE)
+                : 1.0; // no obstacles in range → fully clear
+
+            // 3: Right clearance
+            let rightHits = 0, rightObstacleSum = 0;
+            for (const i of rightSectors) {
+                if (isHit(i) && sectors[i] < NAV_RANGE) {
+                    rightObstacleSum += sectors[i];
+                    rightHits++;
+                }
+            }
+            const rightClearance = rightHits > 0
+                ? Math.min(1, (rightObstacleSum / rightHits) / NAV_RANGE)
+                : 1.0; // no obstacles in range → fully clear
+
+            // 4: Closing rate (simplified — would need previous frame for real delta)
+            const closingRate = 0; // TODO: track frame-to-frame depth change
+
+            // 5: Corridor direction — which direction has the most free space?
+            // Only meaningful when there ARE obstacles nearby to navigate around.
+            // If nothing is within NAV_RANGE, corridor = 0 (go straight).
+            let hasNearbyObstacle = false;
+            for (let i = 0; i < n; i++) {
+                if (isHit(i) && sectors[i] < NAV_RANGE) { hasNearbyObstacle = true; break; }
+            }
+            let corridorDir = 0;
+            if (hasNearbyObstacle) {
+                // Find the sector with deepest clearance (best escape route)
+                let maxDepth = 0, maxIdx = 0;
+                for (let i = 0; i < n; i++) {
+                    const d = isHit(i) ? sectors[i] : NAV_RANGE;
+                    if (d > maxDepth) { maxDepth = d; maxIdx = i; }
+                }
+                let corridorAngle = (maxIdx / n) * 360;
+                if (corridorAngle > 180) corridorAngle -= 360;
+                corridorDir = Math.max(-1, Math.min(1, corridorAngle / 180));
+            }
+
+            // 6: Roughness — computed from ground height profile (lowest beam hits)
+            // Measures variance of adjacent ground height differences.
+            // Flat terrain: all ground points at similar Y → low roughness.
+            // Rocky terrain: ground Y jumps between adjacent columns → high roughness.
+            let heightDiffSum = 0;
+            let heightDiffCount = 0;
+            const gp = groundProfile; // [column] = ground Y coordinate
+            for (let i = 1; i < n; i++) {
+                // Only count columns where both have valid ground hits
+                // (groundProfile[i] === 0 when lowest beam missed the ground)
+                if (gp[i] !== 0 && gp[i - 1] !== 0) {
+                    const diff = gp[i] - gp[i - 1];
+                    heightDiffSum += diff * diff;
+                    heightDiffCount++;
+                }
+            }
+            // Wrap-around: compare last column to first
+            if (gp[0] !== 0 && gp[n - 1] !== 0) {
+                const diff = gp[0] - gp[n - 1];
+                heightDiffSum += diff * diff;
+                heightDiffCount++;
+            }
+            // Normalize: max roughness threshold = 2m height diff between adjacent columns
+            const MAX_ROUGHNESS_DIFF = 2.0; // meters
+            const avgDiffSq = heightDiffCount > 0 ? heightDiffSum / heightDiffCount : 0;
+            const roughness = Math.min(1, avgDiffSq / (MAX_ROUGHNESS_DIFF * MAX_ROUGHNESS_DIFF));
+
+            // 7: Confidence (based on how many sectors got an obstacle return)
+            // High confidence = dense obstacle environment (lots of data).
+            // Low confidence = open terrain (fewer obstacles to reason about).
+            let obstacleReturns = 0;
+            for (let i = 0; i < n; i++) if (isHit(i)) obstacleReturns++;
+            const confidence = obstacleReturns / n;
+
+            return { frontProximity, frontBearing, leftClearance, rightClearance, closingRate, corridorDir, roughness, confidence };
+        }
+
+        // ── LiDAR polar visualization ─────────────────────────────────────────
+        function drawLidarPolar(sectors, maxRange) {
+            const w = lidarCanvas.width;
+            const h = lidarCanvas.height;
+            const cx = w / 2, cy = h / 2;
+            const radius = Math.min(cx, cy) - 20;
+
+            lidarCtx.clearRect(0, 0, w, h);
+
+            // Background
+            lidarCtx.fillStyle = "#000";
+            lidarCtx.fillRect(0, 0, w, h);
+
+            // Range rings
+            for (let r = 0.25; r <= 1; r += 0.25) {
+                lidarCtx.beginPath();
+                lidarCtx.arc(cx, cy, radius * r, 0, Math.PI * 2);
+                lidarCtx.strokeStyle = "rgba(88, 166, 255, 0.15)";
+                lidarCtx.lineWidth = 1;
+                lidarCtx.stroke();
+
+                // Range label
+                lidarCtx.fillStyle = "rgba(88, 166, 255, 0.3)";
+                lidarCtx.font = "9px monospace";
+                lidarCtx.fillText((maxRange * r).toFixed(0) + "m", cx + 3, cy - radius * r + 10);
+            }
+
+            // Cross hairs
+            lidarCtx.strokeStyle = "rgba(88, 166, 255, 0.1)";
+            lidarCtx.beginPath();
+            lidarCtx.moveTo(cx, 10); lidarCtx.lineTo(cx, h - 10);
+            lidarCtx.moveTo(10, cy); lidarCtx.lineTo(w - 10, cy);
+            lidarCtx.stroke();
+
+            // Cardinal labels — rotated to match camera heading
+            // lastCameraYaw: 0 = +Z world. We place N/S/E/W at their
+            // true world positions relative to the camera.
+            lidarCtx.fillStyle = "rgba(88, 166, 255, 0.4)";
+            lidarCtx.font = "10px monospace";
+            lidarCtx.textAlign = "center";
+            const cardinals = [
+                { label: "N", worldAngle: 0 },           // +Z
+                { label: "E", worldAngle: Math.PI / 2 },  // +X
+                { label: "S", worldAngle: Math.PI },       // -Z
+                { label: "W", worldAngle: -Math.PI / 2 },  // -X
+            ];
+            for (const c of cardinals) {
+                // Angle on the polar display: world angle minus camera yaw,
+                // then offset by -PI/2 so sector 0 (forward) points UP on canvas
+                const displayAngle = (c.worldAngle - lastCameraYaw) - Math.PI / 2;
+                const lx = cx + Math.cos(displayAngle) * (radius + 12);
+                const ly = cy + Math.sin(displayAngle) * (radius + 12);
+                lidarCtx.fillText(c.label, lx, ly + 4);
+            }
+
+            const n = sectors.length;
+            const sectorArc = (Math.PI * 2) / n;
+
+            // Filled sectors (depth as distance from center, color by distance)
+            // Sector 0 = camera forward = UP on canvas (-PI/2 offset)
+            for (let i = 0; i < n; i++) {
+                const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+                const depth = sectors[i];
+                const normalizedDepth = Math.min(1, depth / maxRange);
+                const r = normalizedDepth * radius;
+
+                // Color: green (close) -> yellow -> red (far/no return)
+                let red, green, blue;
+                if (normalizedDepth < 0.3) {
+                    red = 255; green = Math.floor(normalizedDepth / 0.3 * 180); blue = 0;
+                } else if (normalizedDepth < 0.7) {
+                    const t = (normalizedDepth - 0.3) / 0.4;
+                    red = 255 - Math.floor(t * 100); green = 180 + Math.floor(t * 75); blue = 0;
+                } else {
+                    const t = (normalizedDepth - 0.7) / 0.3;
+                    red = 155 - Math.floor(t * 100); green = 255 - Math.floor(t * 200); blue = Math.floor(t * 100);
+                }
+
+                // Sector wedge
+                lidarCtx.beginPath();
+                lidarCtx.moveTo(cx, cy);
+                lidarCtx.arc(cx, cy, r, angle - sectorArc / 2, angle + sectorArc / 2);
+                lidarCtx.closePath();
+                lidarCtx.fillStyle = `rgba(${red}, ${green}, ${blue}, 0.6)`;
+                lidarCtx.fill();
+
+                // Bright dot at the hit point
+                const hitX = cx + Math.cos(angle) * r;
+                const hitY = cy + Math.sin(angle) * r;
+                lidarCtx.beginPath();
+                lidarCtx.arc(hitX, hitY, 2, 0, Math.PI * 2);
+                lidarCtx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+                lidarCtx.fill();
+            }
+
+            // Center dot (camera position)
+            lidarCtx.beginPath();
+            lidarCtx.arc(cx, cy, 4, 0, Math.PI * 2);
+            lidarCtx.fillStyle = "#58a6ff";
+            lidarCtx.fill();
+
+            // Forward arrow — always points UP (sector 0 = camera forward)
+            const arrowLen = radius * 0.3;
+            const arrowTipX = cx;
+            const arrowTipY = cy - arrowLen;
+            lidarCtx.beginPath();
+            lidarCtx.moveTo(cx, cy);
+            lidarCtx.lineTo(arrowTipX, arrowTipY);
+            lidarCtx.strokeStyle = "#58a6ff";
+            lidarCtx.lineWidth = 2;
+            lidarCtx.stroke();
+            // Arrowhead
+            lidarCtx.beginPath();
+            lidarCtx.moveTo(arrowTipX, arrowTipY);
+            lidarCtx.lineTo(arrowTipX - 5, arrowTipY + 8);
+            lidarCtx.lineTo(arrowTipX + 5, arrowTipY + 8);
+            lidarCtx.closePath();
+            lidarCtx.fillStyle = "#58a6ff";
+            lidarCtx.fill();
+        }
+
+        // ── Update feature bars ───────────────────────────────────────────────
+        function updateFeatureBars(features) {
+            FEATURES.forEach(f => {
+                const val = features[f.key] || 0;
+                const el = featureEls[f.key];
+                // Normalize to 0-100% for bar display
+                let pct;
+                if (f.min < 0) {
+                    // Bipolar: -1..+1 maps to 0..100
+                    pct = ((val - f.min) / (f.max - f.min)) * 100;
+                } else {
+                    pct = (val / f.max) * 100;
+                }
+                pct = Math.max(0, Math.min(100, pct));
+                el.fill.style.width = pct + "%";
+                el.value.textContent = val.toFixed(2);
+            });
+        }
+
+        // ── Main loop ─────────────────────────────────────────────────────────
+        let frameCount = 0;
+        function onTick() {
+            // Update every 6th frame for performance (beams×sectors rays per scan)
+            if (frameCount++ % 6 === 0) {
+                sectors = castDepthSectors(CONFIG.sectorCount, CONFIG.maxRange);
+                drawLidarPolar(sectors, CONFIG.maxRange);
+                const features = computePerceptFeatures(sectors, CONFIG.maxRange);
+                updateFeatureBars(features);
+            }
+        }
+
+        // ── Controls ──────────────────────────────────────────────────────────
+        function updateInfoLine() {
+            const totalRays = CONFIG.sectorCount * CONFIG.beams;
+            sectorInfoEl.textContent = `${CONFIG.sectorCount} cols \u00d7 ${CONFIG.beams} beams = ${totalRays} rays | Range: ${CONFIG.maxRange}m | vFOV: \u00b1${CONFIG.vFov/2}\u00b0`;
+        }
+
+        document.getElementById("ctrlSectors").addEventListener("change", (e) => {
+            CONFIG.sectorCount = parseInt(e.target.value);
+            sectors = new Float32Array(CONFIG.sectorCount);
+            updateInfoLine();
+        });
+
+        document.getElementById("ctrlBeams").addEventListener("change", (e) => {
+            CONFIG.beams = parseInt(e.target.value);
+            beamGrid = []; // force reallocation
+            updateInfoLine();
+        });
+
+        document.getElementById("ctrlRange").addEventListener("input", (e) => {
+            CONFIG.maxRange = parseInt(e.target.value);
+            camera.maxZ = CONFIG.maxRange * 1.5;
+            updateInfoLine();
+        });
+
+        document.getElementById("ctrlEncoding").addEventListener("change", (e) => {
+            CONFIG.encoding = e.target.value;
+        });
+
+        document.getElementById("ctrlScene").addEventListener("change", (e) => {
+            const type = e.target.value;
+            buildScene(type);
+            scene.registerBeforeRender(onTick);
+        });
+
+        // ── Init ──────────────────────────────────────────────────────────────
+        buildScene("mars");
+        scene.registerBeforeRender(onTick);
+
+        engine.runRenderLoop(() => {
+            applyManualMovement();
+            if (scene) scene.render();
+        });
+
+        window.addEventListener("resize", () => engine.resize());
+
+        // Ensure canvas gets keyboard focus on click for WASD movement
+        renderCanvas.addEventListener("click", () => renderCanvas.focus());
+        renderCanvas.addEventListener("pointerdown", () => renderCanvas.focus());
+
+        console.log("[Murmuration] LiDAR scan sample loaded. Click canvas, then WASD + mouse to navigate.");
+        console.log("[Murmuration] Access sectors: window.__sectors, features: window.__features");
+
+        // Expose for console debugging
+        Object.defineProperty(window, "__sectors", { get: () => sectors });
+        Object.defineProperty(window, "__features", {
+            get: () => computePerceptFeatures(sectors, CONFIG.maxRange)
+        });
+    })();
+    </script>
 </body>
 </html>

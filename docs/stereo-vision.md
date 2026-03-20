@@ -91,11 +91,20 @@ depth discontinuities at object boundaries.
 | Industry standard (automotive, robotics) | Still fails on textureless regions |
 | Good balance speed/quality               | Requires parameter tuning          |
 
-### Deep Learning (not implemented)
+### CNN-based Matching (planned)
 
-Neural networks (e.g., PSMNet, RAFT-Stereo) learn to match from data.
-Significantly better on difficult cases (reflections, thin structures,
-repetitive patterns). Requires GPU inference and training data.
+Convolutional neural networks (e.g., PSMNet, RAFT-Stereo, AANet) learn
+to match from data. Significantly better on difficult cases (reflections,
+thin structures, repetitive patterns). The CNN architecture is under
+development in `spiky-panda-ext` and will be integrated as a
+`MatchingCNN` compute node in the configurable pipeline
+(`PipelineBuilder.stereoCNN()`).
+
+**Why CNN over MLP?** Stereo matching is fundamentally a 2D spatial
+correlation problem — convolutional layers preserve spatial structure
+(neighboring pixels matter), whereas an MLP on flattened patches destroys
+the 2D topology. CNNs also share weights across spatial positions,
+making them far more parameter-efficient for image-to-image tasks.
 
 ## Pros vs LiDAR
 
@@ -214,23 +223,35 @@ The training package (`scenario.stereo.ts`) simulates stereo depth with:
 This is a simplified model — it does not simulate actual image matching,
 repetitive pattern errors, or lighting effects. For validation against
 realistic stereo failure modes, use the Babylon adapter with real rendered
-images and an actual stereo matcher (SGM or GPU-based).
+images and an actual stereo matcher (SGM or the future CNN matcher).
 
 ## Integration with the Navigation Pipeline
 
-Stereo feeds into the same `IDepthBuffer → IConvolutionProvider → sectors`
-pipeline as LiDAR. The `DepthFusionNode` wraps both:
+The navigation pipeline is a **configurable compute graph**. Stereo matching
+is one of several depth source options, selectable at runtime:
 
 ```
-IStereoNode (passive, low power) ─┐
-                                   ├─► DepthFusionNode ─► sectors ─► PerceptCortex
-ILidarNode (active, backup)  ─────┘
-                                        │
-                                   IDepthFusionPolicy
-                                   (stereo when healthy,
-                                    LiDAR as fallback)
+Config A: LiDAR only
+  [LidarSource] ──► [Convolution] ──► [PerceptCortex] ──► [DecisionCortex]
+
+Config B: Stereo + classical matching (BM/SGM)
+  [StereoCapture] ──► [BM/SGM] ──► [Convolution] ──► [Percept] ──► [Decision]
+
+Config C: Stereo + CNN matching (planned)
+  [StereoCapture] ──► [MatchingCNN] ──► [Convolution] ──► [Percept] ──► [Decision]
+
+Config D: Fused
+  [StereoCapture] ──► [BM/SGM] ──┐
+                                  ├──► [Fusion] ──► [Convolution] ──► [Percept] ──► [Decision]
+  [LidarSource] ────────────────┘
 ```
+
+The `DepthFusionNode` selects the best source based on operating conditions:
+
+- **Day + good texture** → stereo (passive, low power)
+- **Night / textureless / stereo unhealthy** → LiDAR (active, reliable)
 
 The PerceptCortex receives sectors regardless of source — it does not know
-or care whether the depth came from stereo or LiDAR. The `IFusedDepthResult`
-carries the source type and confidence for logging and MCP layer reasoning.
+or care whether the depth came from stereo, LiDAR, or a CNN matcher. The
+`IFusedDepthResult` carries the source type and confidence for logging
+and MCP layer reasoning.

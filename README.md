@@ -35,7 +35,7 @@ packages/
     spiky-panda/   Compute graph infrastructure (ITensor, IComputeNode, ComputeGraph)
                    Local sandbox for @spiky-panda/core extensions (future: CNN)
     core/          Framework-agnostic interfaces, MLP brain, odometry, math/units,
-                   navigation compute nodes, MatchingCortex, PipelineBuilder
+                   navigation compute nodes, PipelineBuilder (CNN matcher planned)
     babylon/       Babylon.js sensor adapters (IMU, LiDAR, stereo, wheels)
     training/      Scenarios, labeling, dataset management, training loops
   host/
