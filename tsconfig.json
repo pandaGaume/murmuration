@@ -9,6 +9,7 @@
     // Shared compiler options live in tsconfig.build.json (extended by each package).
     "files": [],
     "references": [
+        { "path": "packages/dev/spiky-panda/tsconfig.build.json" },
         { "path": "packages/dev/core/tsconfig.build.json" },
         { "path": "packages/dev/babylon/tsconfig.build.json" },
         { "path": "packages/dev/training/tsconfig.build.json" }

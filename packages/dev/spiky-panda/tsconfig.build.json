@@ -7,14 +7,9 @@
         "rootDir": "./src",
         "skipLibCheck": true,
         "paths": {
-            "@dev/core/*": ["dev/core/src/*"],
-            "@dev/spiky-panda/*": ["dev/spiky-panda/dist/*"]
+            "@dev/spiky-panda/*": ["dev/spiky-panda/src/*"]
         }
     },
-
-    "references": [
-        { "path": "../spiky-panda/tsconfig.build.json" }
-    ],
 
     "include": ["./src/**/*.ts", "./src/**/*.tsx"],
     "exclude": ["**/node_modules", "**/dist"]

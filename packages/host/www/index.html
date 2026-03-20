@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Murmuration — Autonomous Navigation Framework</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Hero -->
+<header class="hero">
+    <div class="hero-overlay">
+        <h1>Murmuration</h1>
+        <p class="tagline">Autonomous navigation for simulated rovers, drones &amp; swarms</p>
+        <p class="sub">Cascaded MLPs &bull; Stereo + LiDAR fusion &bull; MCP/LLM orchestration</p>
+    </div>
+</header>
+
+<!-- Architecture -->
+<section class="section" id="architecture">
+    <h2>System Architecture</h2>
+    <p>
+        Digital twins run in parallel inside a Babylon.js simulation.
+        Each twin has its own sensor stack (LiDAR, stereo, IMU, wheels)
+        feeding a cascaded MLP brain. An LLM supervisor coordinates
+        training via MCP, and the best policy is exported to the physical rover.
+    </p>
+    <div class="img-row">
+        <img src="img/architecture.png" alt="System architecture — LLM supervisor, MCP aggregation, digital twins, ONNX export, physical rover" class="img-full">
+    </div>
+</section>
+
+<!-- Pipeline -->
+<section class="section alt" id="pipeline">
+    <h2>Navigation Pipeline</h2>
+    <p>
+        The depth-to-action pipeline is a configurable compute graph.
+        Swap between LiDAR-only, stereo + classical matching, stereo + learned MatchingCortex,
+        or fused — all at runtime.
+    </p>
+    <div class="cards">
+        <div class="card">
+            <h3>PerceptCortex</h3>
+            <div class="mlp-badge">42 → 16 → 8</div>
+            <p>Compresses LiDAR/stereo depth + IMU into 8 learned environment features.</p>
+        </div>
+        <div class="card">
+            <h3>DecisionCortex</h3>
+            <div class="mlp-badge">21 → 16 → 4</div>
+            <p>Maps features + pose + slip + goal to steering, throttle, brake, risk.</p>
+        </div>
+        <div class="card">
+            <h3>MatchingCortex</h3>
+            <div class="mlp-badge">164 → 64 → 2</div>
+            <p>Learned stereo matcher — replaces BM/SGM with a trained MLP per grid cell.</p>
+        </div>
+    </div>
+</section>
+
+<!-- Samples -->
+<section class="section" id="samples">
+    <h2>Samples</h2>
+    <div class="cards">
+        <a class="card card-link" href="samples/lidar-scan.html">
+            <h3>LiDAR Scan</h3>
+            <p>Visualize a simulated LiDAR scan from the depth pipeline with convolution pooling.</p>
+        </a>
+        <a class="card card-link" href="samples/stereo-depth.html">
+            <h3>Stereo Depth</h3>
+            <p>Compare stereo matching (BM vs MatchingCortex) on synthetic scenarios.</p>
+        </a>
+        <a class="card card-link" href="samples/navigation.html">
+            <h3>Navigation</h3>
+            <p>Run the full perception → decision cascade on random obstacle layouts.</p>
+        </a>
+        <a class="card card-link" href="samples/training.html">
+            <h3>Training</h3>
+            <p>Watch the PerceptCortex train live — loss curves, per-feature MSE, weight visualization.</p>
+        </a>
+        <a class="card card-link" href="samples/compute-graph.html">
+            <h3>Compute Graph</h3>
+            <p>Build and run custom pipeline configurations — swap depth sources at runtime.</p>
+        </a>
+        <a class="card card-link" href="samples/odometry.html">
+            <h3>Odometry</h3>
+            <p>6-wheel differential odometry with slip detection and N-wheel averaging.</p>
+        </a>
+    </div>
+</section>
+
+<!-- Docs -->
+<section class="section alt" id="docs">
+    <h2>Documentation</h2>
+    <div class="cards">
+        <a class="card card-link" href="https://github.com" target="_blank">
+            <h3>Navigation Architecture</h3>
+            <p>Two-tier brain, sensor layer, cascaded MLP design, MCP strategic layer.</p>
+        </a>
+        <a class="card card-link" href="https://github.com" target="_blank">
+            <h3>Stereo Vision</h3>
+            <p>Matching algorithms, failure modes, noise characteristics, trade-offs vs LiDAR.</p>
+        </a>
+        <a class="card card-link" href="https://github.com" target="_blank">
+            <h3>Differential Odometry</h3>
+            <p>N-wheel per-side averaging with slip filtering for 6-wheel rovers.</p>
+        </a>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer>
+    <p>Murmuration &bull; Built with <a href="https://www.babylonjs.com" target="_blank">Babylon.js</a> &bull; MLP via <a href="#">@spiky-panda/core</a></p>
+</footer>
+
+<!-- Libraries (loaded for sample pages) -->
+<script src="lib/spiky-panda-ext.js"></script>
+<script src="lib/murmuration-core.js"></script>
+<script src="lib/murmuration-babylon.js"></script>
+<script src="lib/murmuration-training.js"></script>
+
+</body>
+</html>

@@ -21,6 +21,7 @@ const resolve = {
     alias: {
         "@dev/training": path.resolve(__dirname, "src"),
         "@dev/core": path.resolve(__dirname, "../core/src"),
+        "@dev/spiky-panda": path.resolve(__dirname, "../spiky-panda/src"),
     },
 };
 

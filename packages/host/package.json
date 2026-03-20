@@ -1,0 +1,9 @@
+{
+    "name": "murmuration-host",
+    "version": "0.1.0",
+    "description": "Static host serving bundled libraries",
+    "private": true,
+    "scripts": {
+        "serve": "npx http-server www -p 8080 -c-1 -o --cors"
+    }
+}

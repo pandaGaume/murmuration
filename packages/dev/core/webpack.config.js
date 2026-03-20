@@ -22,6 +22,7 @@ const resolve = {
     extensions: [".ts", ".tsx", ".js"],
     alias: {
         "@dev/core": path.resolve(__dirname, "src"),
+        "@dev/spiky-panda": path.resolve(__dirname, "../spiky-panda/src"),
     },
 };
 

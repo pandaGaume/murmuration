@@ -41,9 +41,12 @@
     "format:check": "prettier --check \"packages/**/src/**/*.{ts,tsx,js,json,scss,css}\"",
     "format:fix": "prettier --write \"packages/**/src/**/*.{ts,tsx,js,json,scss,css}\"",
     "build:all": "npm run clean && tsc -b",
-    "bundle": "npm run bundle --workspace=murmuration-core && npm run bundle --workspace=murmuration-babylon && npm run bundle --workspace=murmuration-training",
-    "bundle:dev": "npm run bundle:dev --workspace=murmuration-core && npm run bundle:dev --workspace=murmuration-babylon && npm run bundle:dev --workspace=murmuration-training",
+    "bundle": "npm run bundle --workspace=spiky-panda-ext && npm run bundle --workspace=murmuration-core && npm run bundle --workspace=murmuration-babylon && npm run bundle --workspace=murmuration-training",
+    "bundle:dev": "npm run bundle:dev --workspace=spiky-panda-ext && npm run bundle:dev --workspace=murmuration-core && npm run bundle:dev --workspace=murmuration-babylon && npm run bundle:dev --workspace=murmuration-training",
     "bundle:all": "npm run build:all && npm run bundle",
+    "deploy-bundles": "node scripts/deploy-bundles.js",
+    "dist": "npm run bundle:all && npm run deploy-bundles",
+    "serve": "npm run serve --workspace=murmuration-host",
     "clean": "node scripts/clean.cjs"
   },
   "engines": {

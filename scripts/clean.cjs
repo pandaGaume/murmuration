@@ -5,6 +5,8 @@ const glob = require("path");
 const root = path.resolve(__dirname, "..");
 
 const dirs = [
+    "packages/dev/spiky-panda/dist",
+    "packages/dev/spiky-panda/bundle",
     "packages/dev/core/dist",
     "packages/dev/core/bundle",
     "packages/dev/babylon/dist",

@@ -444,6 +444,22 @@ export interface INavigatorBrainOptions {
      * Shared by both MLPs. If not provided, `loadWeights()` will throw.
      */
     weightLoader?: IWeightLoader;
+
+    /**
+     * Optional compute graph pipeline.
+     *
+     * When set, the navigator uses this configurable compute graph
+     * instead of the hardcoded PerceptCortex → DecisionCortex cascade.
+     * The graph can be built via `PipelineBuilder` for common configs
+     * (lidar-only, stereo+SGM, stereo+MLP, fused) or constructed
+     * manually for custom pipelines.
+     *
+     * When not set, falls back to the built-in cascade (backward compatible).
+     *
+     * @see PipelineBuilder
+     * @see IComputeGraph
+     */
+    computeGraph?: import("@dev/core/compute").IComputeGraph;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

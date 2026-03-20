@@ -22,7 +22,9 @@ frequency (100+ Hz) within the simulation tick loop:
 | Sensor             | Interface                   | Output                                      | Rate        | Role                                        |
 | ------------------ | --------------------------- | ------------------------------------------- | ----------- | ------------------------------------------- |
 | **IMU**            | `IIMU6Node`                 | `ICartesian3` (acc + gyro)                  | 100–1000 Hz | Short-term ego-motion, tilt, fall detection |
-| **LiDAR**          | `ILidarNode`                | `ILidarScanResult` (depth grid)             | 10–30 Hz    | Obstacle detection, free-space mapping      |
+| **Stereo**         | `IStereoNode`               | `IStereoScanResult` (dense depth + confidence) | 10–30 Hz | Primary depth (day), passive, low power     |
+| **LiDAR**          | `ILidarNode`                | `ILidarScanResult` (depth grid)             | 10–30 Hz    | Backup depth (night/precision), active      |
+| **Depth Fusion**   | `DepthFusionNode`           | `IFusedDepthResult` (sectors + source)      | 10–30 Hz    | Selects best depth source automatically     |
 | **Wheel Encoders** | `IWheelEncoderNode`         | `IWheelEncoderData` (ticks, velocity, slip) | 100+ Hz     | Ground-truth speed, traction monitoring     |
 | **Odometry**       | `IDifferentialOdometryNode` | `IOdometryEstimate` (x, y, theta)           | 100+ Hz     | Dead-reckoning pose estimate                |
 
@@ -35,6 +37,23 @@ consumption patterns:
 - **Push**: `onSensorEvent(callback)` emits batched records asynchronously
   (used by telemetry loggers and the MCP layer).
 
+### Depth Fusion — Stereo + LiDAR
+
+The primary depth source is **stereoscopic vision** (two passive cameras),
+not LiDAR. This mirrors real Mars rovers: NavCams (stereo) handle daily
+navigation at low power; LiDAR is reserved for night operations and precise
+geological surveys.
+
+The `DepthFusionNode` automatically selects the best source:
+- **Day + good texture** → stereo (passive, low power, dense depth)
+- **Night / textureless / stereo unhealthy** → LiDAR (active, reliable)
+
+Both sources produce an `IDepthBuffer` through the same pipeline, so the
+PerceptCortex is depth-source-agnostic.
+
+See [stereo-vision.md](./stereo-vision.md) for the matching algorithms,
+failure modes, noise characteristics, and trade-offs vs LiDAR.
+
 ### State Fusion
 
 Raw sensor readings drift and disagree. The state fusion step combines
@@ -43,8 +62,10 @@ them into a single, confidence-weighted estimate:
 - **IMU** provides high-frequency but drift-prone angular/linear rates.
 - **Odometry** provides medium-frequency ground-truth but accumulates
   integration error over time.
-- **LiDAR** can correct drift via scan matching (comparing successive
-  depth frames against the estimated pose).
+- **Stereo / LiDAR** depth can correct drift via scan matching (comparing
+  successive depth frames against the estimated pose).
+- **Stereo confidence** from the fusion node signals when depth data should
+  be down-weighted (textureless terrain, low light).
 - **Wheel slip** flags from the encoders signal when odometry should be
   down-weighted (the `reliable` flag on `IOdometryEstimate` feeds into
   the confidence weighting).
